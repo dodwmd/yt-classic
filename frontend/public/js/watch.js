@@ -1,4 +1,4 @@
-import { $, api, channelHref, clone, fillRow, laterButton, markWatched, run, setTitle, thumbUrl, watchHref } from "./lib.js";
+import { $, api, channelHref, clone, fillRow, laterButton, markWatched, reportProgress, run, setTitle, thumbUrl, watchHref } from "./lib.js";
 import { formatViews, join, timeAgo, viewsText } from "./fmt.js";
 import { initPlayer } from "./player.js";
 
@@ -29,7 +29,7 @@ run(async () => {
   bar.value = start;
   player.hidden = false;
   const now = initPlayer(player);
-  if (now) reportProgress(video, now, v.id);
+  if (now) reportProgress(video, now, { id: v.id });
 
   const extra = lang ? `&a=${encodeURIComponent(lang)}` : "";
   qualities.forEach((h, i) => {
@@ -62,22 +62,3 @@ run(async () => {
   btn.id = "later";
   $("#later-box").append(btn, msg);
 });
-
-// Reports progress every 10 s while playing and on pause/end/leave, once something has really played.
-function reportProgress(video, now, id) {
-  let last = -1, played = false;
-  const send = (finished) => {
-    const position = Math.floor(now());
-    if (!played || (!finished && position === last)) return;
-    last = position;
-    const body = new URLSearchParams({ id, position });
-    if (finished) body.set("finished", 1);
-    fetch("/api/progress", { method: "POST", body, keepalive: true }).catch(() => {});
-  };
-  setInterval(() => video.paused || send(), 10000);
-  video.addEventListener("playing", () => (played = true));
-  video.addEventListener("pause", () => send());
-  video.addEventListener("ended", () => send(true));
-  addEventListener("pagehide", () => send());
-  document.addEventListener("visibilitychange", () => document.hidden && send());
-}

@@ -11,12 +11,12 @@ export async function api(path, init) {
     location.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
     return new Promise(() => {});
   }
-  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(body.error || `Request failed (${res.status})`), { code: body.code });
   return body;
 }
 
 const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
-const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"]]);
+const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"], ["/tv", "/tv"]]);
 export function destination(next) {
   const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
   return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
@@ -38,11 +38,51 @@ export async function run(main) {
   try {
     await main();
     status.hidden = true;
+    tvLink();
     fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {
     status.textContent = err.message || String(err);
     status.hidden = false;
   }
+}
+
+// The masthead's TV entry stays a link (the TV page explains), but is greyed and, when TV is not available yet, says why
+// in visible text that the link is described by.
+function tvLink() {
+  const a = $("#tvlink");
+  if (!a) return;
+  fetch("/api/tv/status").then((r) => r.json()).then((s) => {
+    if (s.ok || !s.need) return;
+    const more = s.need - s.have, hint = document.createElement("span");
+    hint.id = "tvhint";
+    hint.className = "hint";
+    hint.textContent = `Subscribe to ${more} more channel${more === 1 ? "" : "s"} to turn on TV`;
+    a.after(hint);
+    a.setAttribute("aria-disabled", "true");
+    a.setAttribute("aria-describedby", "tvhint");
+  }).catch(() => {});
+}
+
+// Reports progress every 10 s while playing and on pause/end/leave, once something has really played.
+// ref.id is the video being reported (TV changes it, and leaves it empty while nothing should be reported); returns send(finished).
+export function reportProgress(video, now, ref) {
+  let last = -1, played = false;
+  const send = (finished) => {
+    const position = Math.floor(now());
+    if (!ref.id || !played || (!finished && position === last)) return;
+    last = position;
+    const body = new URLSearchParams({ id: ref.id, position });
+    if (finished) body.set("finished", 1);
+    fetch("/api/progress", { method: "POST", body, keepalive: true }).catch(() => {});
+  };
+  setInterval(() => video.paused || send(), 10000);
+  video.addEventListener("playing", () => (played = true));
+  video.addEventListener("loadstart", () => (played = false));
+  video.addEventListener("pause", () => send());
+  video.addEventListener("ended", () => send(true));
+  addEventListener("pagehide", () => send());
+  document.addEventListener("visibilitychange", () => document.hidden && send());
+  return send;
 }
 
 export function setTitle(title) {

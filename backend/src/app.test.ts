@@ -5,7 +5,7 @@ import { request, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createApp } from "./app.ts";
+import { createApp, resetTvLimiter } from "./app.ts";
 import { clearCache } from "./cache.ts";
 import { getDb } from "./db.ts";
 import { clearHistory } from "./history.ts";
@@ -14,6 +14,8 @@ import { killChildren } from "./yt/dlp.ts";
 
 const CHANNEL = "UC" + "a".repeat(22);
 const VID = "AAAAAAAAAAA";
+const tvChan = (c: string) => "UC" + c.repeat(22);
+const tvId = (c: string, i: number) => `T${c}${i}`.padEnd(11, "x");
 
 let server: Server;
 let port = 0;
@@ -43,6 +45,22 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
   // Stub only the YouTube Data API; nothing here touches the network.
   globalThis.fetch = (async (input: string | URL | Request) => {
     const u = input instanceof Request ? input.url : String(input);
+    if (u.includes("/feeds/videos.xml")) { // TV tests: channel UC<c x22> has videos T<c>1.. T<c>3
+      const cid = new URL(u).searchParams.get("channel_id") ?? "";
+      const c = cid[2];
+      const entries = [1, 2, 3].map((i) => `<entry><yt:videoId>${tvId(c, i)}</yt:videoId><yt:channelId>${cid}</yt:channelId><title>t${c}${i}</title><published>2026-01-0${i}T00:00:00Z</published><author><name>Chan ${c}</name></author></entry>`).join("");
+      return new Response(`<feed><yt:channelId>${cid}</yt:channelId>${entries}</feed>`, { status: 200 });
+    }
+    if (u.includes("/youtube/v3/videos") && (new URL(u).searchParams.get("id") ?? "").startsWith("T")) {
+      const id = new URL(u).searchParams.get("id")!;
+      const c = id[1];
+      const live = id[2] === "3";
+      const item = {
+        id, snippet: { title: `Title ${id}`, channelId: tvChan(c), channelTitle: `Chan ${c}`, description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: {}, liveBroadcastContent: live ? "live" : "none" },
+        contentDetails: { duration: "PT10M" }, statistics: {},
+      };
+      return new Response(JSON.stringify({ items: [item] }), { status: 200 });
+    }
     if (u.includes("/youtube/v3/channels")) {
       const item = { id: CHANNEL, snippet: { title: "Chan", description: "d", thumbnails: {} }, statistics: {}, brandingSettings: {} };
       return new Response(JSON.stringify({ items: [item] }), { status: 200 });
@@ -80,6 +98,7 @@ beforeEach(() => {
   for (const p of listPlaylists()) if (!p.builtin) deletePlaylist(p.id);
   getDb().exec("DELETE FROM playlist_items");
   videoCalls = 0;
+  resetTvLimiter();
   rmSync(process.env.PIDFILE!, { force: true });
   delete process.env.FAKE_RESOLVE_SLEEP;
   delete process.env.ALLOWED_HOSTS;
@@ -116,6 +135,81 @@ test("/api/home returns exactly the subscriptions and the feed (no suggestion ro
   const r = await get("/api/home");
   assert.equal(r.status, 200);
   assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["continue", "feed", "subs"]);
+});
+
+const subscribeTv = async (n: number) => {
+  for (let i = 1; i <= n; i++) assert.equal((await get("/api/subscribe", { method: "POST", body: `id=${tvChan(String(i))}`, headers: { "content-type": "application/x-www-form-urlencoded" } })).status, 200);
+};
+const unsubscribeTv = async () => {
+  for (let i = 1; i <= 6; i++) await get("/api/unsubscribe", { method: "POST", body: `id=${tvChan(String(i))}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+};
+
+test("TV: the server enforces the five-subscription gate and validates input", async () => {
+  const status = JSON.parse((await get("/api/tv/status")).body);
+  assert.deepEqual(status, { have: 0, need: 5, ok: false });
+  const r = await get("/api/tv/next");
+  assert.equal(r.status, 409);
+  const body = JSON.parse(r.body);
+  assert.equal(body.code, "need-subscriptions");
+  assert.deepEqual([body.have, body.need], [0, 5]);
+  assert.match(body.error, /Subscribe to 5 more channels/);
+  assert.equal((await get("/api/tv/next?after=bad")).status, 400);
+  assert.equal((await get("/api/tv/next?seen=" + "A".repeat(5000))).status, 400);
+});
+
+test("TV: /api/tv/next returns the watch shape plus channelId, honours after and seen, and 404s when nothing is left", async () => {
+  await subscribeTv(5);
+  try {
+    assert.equal(JSON.parse((await get("/api/tv/status")).body).ok, true);
+    const after = tvChan("1");
+    const seenIds = new Set<string>();
+    for (let n = 0; n < 6; n++) {
+      const r = await get(`/api/tv/next?after=${after}&seen=${[...seenIds].join(",")}`);
+      assert.equal(r.status, 200, r.body);
+      const o = JSON.parse(r.body);
+      assert.deepEqual(Object.keys(o).sort(), ["channelId", "lang", "qualities", "quality", "video"]);
+      assert.equal(o.channelId, o.video.channelId);
+      assert.notEqual(o.channelId, after);
+      assert.ok(!seenIds.has(o.video.id), "seen is excluded");
+      assert.notEqual(o.video.id[2], "3", "live entries are never picked");
+      assert.equal(o.video.durationSeconds, 600);
+      seenIds.add(o.video.id);
+      resetTvLimiter();
+    }
+    // Four other channels x two playable videos = 8; mark all of them seen.
+    const all = ["2", "3", "4", "5"].flatMap((c) => [1, 2].map((i) => tvId(c, i)));
+    const none = await get(`/api/tv/next?after=${after}&seen=${all.join(",")}`);
+    assert.equal(none.status, 404);
+    assert.equal(JSON.parse(none.body).code, "nothing-playable");
+  } finally {
+    await unsubscribeTv();
+  }
+});
+
+test("TV: only GET, and a cross-site request is refused before any lookup", async () => {
+  await subscribeTv(5);
+  try {
+    const before = videoCalls;
+    assert.equal((await get("/api/tv/next", { method: "POST", body: "" })).status, 405);
+    assert.equal((await get("/api/tv/next", { headers: { "sec-fetch-site": "cross-site" } })).status, 403);
+    assert.equal((await get("/api/tv/next", { headers: { origin: "https://evil.example" } })).status, 403);
+    assert.equal(videoCalls, before, "no lookups for refused requests");
+    assert.equal((await get("/api/tv/next", { headers: { "sec-fetch-site": "same-origin" } })).status, 200);
+  } finally {
+    await unsubscribeTv();
+  }
+});
+
+test("TV: requests are rate limited with Retry-After", async () => {
+  await subscribeTv(5);
+  try {
+    const codes: number[] = [];
+    for (let i = 0; i < 6; i++) codes.push((await get("/api/tv/next")).status);
+    assert.deepEqual(codes.slice(0, 3), [200, 200, 200]);
+    assert.ok(codes.includes(429), `no 429 in ${codes.join(",")}`);
+  } finally {
+    await unsubscribeTv();
+  }
 });
 
 test("search returns JSON with raw (unescaped) data; escaping is the frontend's job", async () => {

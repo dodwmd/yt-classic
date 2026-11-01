@@ -53,7 +53,7 @@ import io.github.dodwmd.ytclassic.App
 import kotlinx.coroutines.flow.first
 
 @Composable
-fun AppNav(app: App, openVideoId: String? = null) {
+fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
     val nav = rememberNavController()
     var query by rememberSaveable { mutableStateOf("") }
     // The player is fullscreen: no masthead. Deliberately not saved: only a composed player enforces it, so after
@@ -70,7 +70,7 @@ fun AppNav(app: App, openVideoId: String? = null) {
     LaunchedEffect(start) {
         if (start != null && openVideoId != null) {
             nav.currentBackStackEntryFlow.first() // the graph is set once the start page has its entry
-            nav.navigate("watch/$openVideoId")
+            nav.navigate(if (openTv) "tv" else "watch/$openVideoId")
         }
     }
     val toHome: () -> Unit = { nav.navigate("home") { popUpTo(nav.graph.id) { inclusive = true } } }
@@ -91,7 +91,8 @@ fun AppNav(app: App, openVideoId: String? = null) {
         val startDestination = start ?: return@Scaffold
         CompositionLocalProvider(LocalOpenSettings provides { settle(); nav.navigate("settings") }) {
         NavHost(nav, startDestination = startDestination, modifier = Modifier.padding(padding)) {
-            composable("home") { HomeScreen(app.api, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }) }
+            composable("home") { HomeScreen(app.api, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) }
+            composable("tv") { TvScreen(app.host, fullscreen, { fullscreen = it }, onExit = { nav.popBackStack() }) }
             composable("playlists") { PlaylistsScreen(app.api) { nav.navigate("playlist/$it") } }
             composable("playlist/{id}", listOf(navArgument("id") { type = NavType.LongType })) { entry ->
                 PlaylistScreen(app.api, entry.arguments?.getLong("id") ?: 0L, openVideo)

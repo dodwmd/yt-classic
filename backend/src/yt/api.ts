@@ -71,6 +71,8 @@ async function videoDetails(ids: string[]): Promise<Map<string, { duration: stri
 
 export interface VideoDetail extends VideoSummary {
   likes?: string;
+  /** "live" or "upcoming" for streams; absent for ordinary videos (and for entries cached before this field existed). */
+  liveBroadcastContent?: string;
 }
 
 export function video(id: string): Promise<VideoDetail | null> {
@@ -89,6 +91,7 @@ export function video(id: string): Promise<VideoDetail | null> {
       durationSeconds: isoSeconds(v.contentDetails.duration),
       views: v.statistics?.viewCount,
       likes: v.statistics?.likeCount,
+      liveBroadcastContent: v.snippet.liveBroadcastContent === "live" || v.snippet.liveBroadcastContent === "upcoming" ? v.snippet.liveBroadcastContent : undefined,
     };
   }, true);
 }

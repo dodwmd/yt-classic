@@ -73,7 +73,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html", "tv.js": "tv.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");
@@ -199,6 +199,8 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination("/"), "/");
   assert.equal(destination("/history"), "/history");
   assert.equal(destination("/subscriptions"), "/subscriptions");
+  assert.equal(destination("/tv"), "/tv");
+  for (const bad of ["/tv?x=1", "/tv/", "/TV", "/tv#//evil.com"]) assert.equal(destination(bad), "/", bad);
   assert.equal(destination("/playlists"), "/playlists");
   assert.equal(destination("/playlists?id=12"), "/playlists?id=12");
   for (const bad of ["/playlists?id=", "/playlists?id=1x", "/playlists?id=1&x=//evil.com", "/playlists?id=1234567890", "/playlists/"]) assert.equal(destination(bad), "/", bad);
@@ -212,4 +214,9 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   for (const evil of ["/%09/evil.com", "/%0a/evil.com", "//evil.com", "/%5cevil.com"]) assert.equal(destination(new URLSearchParams(`next=${evil}`).get("next")), "/", evil);
   const out = destination(`/watch?v=${ID}&x=//evil.com`);
   assert.ok(!out.includes("evil"));
+});
+
+test("every page with the masthead links to TV, and nginx routes /tv", () => {
+  for (const f of htmlFiles.filter((h) => h !== "login.html")) assert.match(read(f), /<a id="tvlink" href="\/tv"/, `${f} has no TV entry`);
+  assert.match(readFileSync(new URL("../nginx.conf", import.meta.url), "utf8"), /location = \/tv\s+\{[^}]*try_files \/tv\.html/);
 });

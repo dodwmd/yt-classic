@@ -173,8 +173,13 @@ data class ImportResult(val added: Int = 0, val existing: Int = 0, val skipped: 
 @Serializable
 data class ImportSkipped(val invalid: Int = 0, val handles: Int = 0, val full: Int = 0)
 
+/** An error body. [code], [have] and [need] are only set by the few errors a client acts on (TV's "need-subscriptions"). */
 @Serializable
-data class ApiError(val error: String = "")
+data class ApiError(val error: String = "", val code: String = "", val have: Int = 0, val need: Int = 0)
+
+/** `GET /api/tv/next`: the next TV video, shaped like the watch page's data (no related list) plus its channel. */
+@Serializable
+data class TvResponse(val video: VideoDetail, val channelId: String = "", val quality: Int = 720)
 
 /** `GET /api/session`: whether the server wants an access token and whether this client's is accepted. */
 @Serializable

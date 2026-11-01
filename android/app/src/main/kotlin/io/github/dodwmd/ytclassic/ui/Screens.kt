@@ -16,7 +16,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.TextButton
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import io.github.dodwmd.ytclassic.data.HistoryItem
 import kotlinx.coroutines.CancellationException
@@ -42,6 +44,7 @@ import io.github.dodwmd.ytclassic.data.formatSeconds
 import io.github.dodwmd.ytclassic.data.formatViews
 import io.github.dodwmd.ytclassic.data.joinParts
 import io.github.dodwmd.ytclassic.data.timeAgo
+import io.github.dodwmd.ytclassic.player.tvNeedMessage
 import io.github.dodwmd.ytclassic.data.viewsText
 import kotlinx.coroutines.launch
 
@@ -105,14 +108,23 @@ fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit, later: LaterState? = n
 )
 
 @Composable
-fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit) {
+fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit, onTv: () -> Unit, tvStopped: String? = null) {
     val loaded = rememberLoad { api.home() }
     LoadedContent(loaded) { home ->
         val watched = rememberWatched(api, home.feed.map { it.id })
         val later = rememberLater(api, (home.resume.map { it.id } + home.feed.map { it.id }).distinct())
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            // Why TV stopped by itself (also when that happened in the background): until TV is started again.
+            if (tvStopped != null) item { Text(tvStopped, modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
             item {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End) {
+                // TV is greyed, with the reason beside it, until there are enough subscriptions (the server enforces it too).
+                val tvNeeds = tvNeedMessage(home.subs.size)
+                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.End) {
+                    if (tvNeeds != null) Text(tvNeeds, color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.weight(1f).padding(start = 8.dp))
+                    TextButton(
+                        onClick = onTv, enabled = tvNeeds == null,
+                        modifier = Modifier.semantics { contentDescription = if (tvNeeds == null) "TV: play videos from your subscriptions" else "TV, unavailable. $tvNeeds" },
+                    ) { Text("TV") }
                     TextButton(onClick = onPlaylists, modifier = Modifier.semantics { contentDescription = "Playlists and Watch later" }) { Text("Playlists") }
                     TextButton(onClick = onHistory, modifier = Modifier.semantics { contentDescription = "Watch history" }) { Text("History") }
                 }

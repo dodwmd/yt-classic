@@ -2,6 +2,7 @@ package io.github.dodwmd.ytclassic.player
 
 import android.content.Context
 import android.content.Intent
+import android.os.PowerManager
 import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
@@ -24,6 +25,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
 import io.github.dodwmd.ytclassic.data.AuthException
+import io.github.dodwmd.ytclassic.data.NeedSubscriptionsException
 import io.github.dodwmd.ytclassic.data.VideoDetail
 import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
@@ -85,6 +87,20 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     var finished by mutableStateOf(false)
         private set
 
+    /** The running TV session (lean-back playback from the subscriptions), or null. See [startTv]. */
+    var tv by mutableStateOf<TvSession?>(null)
+        private set
+    /** Why TV stopped by itself (too few subscriptions, repeated failures); shown on the TV screen until TV is started again. */
+    var tvMessage by mutableStateOf<String?>(null)
+        private set
+    /** The current [tvMessage] is the server rejecting (or missing) the access token: the screen offers Settings. */
+    var tvNeedsToken by mutableStateOf(false)
+        private set
+    private var tvTicker: Job? = null
+    private var tvFetch: Job? = null
+    private var tvWake: PowerManager.WakeLock? = null
+    private var playedTicks = 0
+
     /** Set by MainActivity: true while the app is on screen. */
     var appVisible = false
     /** The "Keep playing in the background" setting, mirrored from DataStore. */
@@ -141,7 +157,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private val playIntent: Boolean get() = if (seek.restarting) pendingPlay else exo.playWhenReady
 
     /** Whether the user expects sound right now (not paused, not finished, not failed). */
-    val wantsToPlay: Boolean get() = video != null && error == null && !finished && playIntent
+    val wantsToPlay: Boolean get() = video != null && error == null && (!finished || tv != null) && playIntent
 
     init {
         // While playing, tell the server every 10 s. Runs on the app scope, so it also works with the screen off.
@@ -187,13 +203,144 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
     fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
         if (video?.id == v.id) return
+        endTv() // the user chose a video themselves: nothing may take over when it ends
+        begin(v, initialQuality, audioLang, startSeconds)
+        screenAttached = true
+    }
+
+    /** [handOver]: TV moving on to the next video; the old stream is not paused first, so the session never looks paused. */
+    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, handOver: Boolean = false) {
         if (video != null) reportProgress() // switching videos: save where the previous one stopped
         lastReported = -1L
         video = v
         lang = audioLang
         seek = StreamSeek(v.durationSeconds ?: 0L, startSeconds)
+        load(startSeconds, initialQuality, play = true, silence = !handOver)
+    }
+
+    /**
+     * Starts TV: one video after another from the subscriptions, with no choices. The decisions live in [TvSession];
+     * this does what it says. The next video is requested shortly before the current one ends so the hand-over has no
+     * gap (the notification and service stay up). TV ends on [stopTv], when the screen is left, when the server says
+     * there are too few subscriptions (after the current video), after [TV_MAX_FAILURES] failures in a row, when the
+     * token is rejected, when background playback is off and the app is hidden, when the task is removed, or when the
+     * user plays something else.
+     */
+    fun startTv() {
+        if (tv != null) return
+        if (video != null) stop()
+        tvMessage = null
+        tvNeedsToken = false
+        val session = TvSession()
+        tv = session
         screenAttached = true
-        load(startSeconds, initialQuality, play = true)
+        buffering = true
+        tvTicker = scope.launch { tickTv(session) }
+        tvPerform(session, session.onStart())
+    }
+
+    /** Opening the TV screen afresh: forget why the last session stopped. */
+    fun clearTvMessage() {
+        if (tv == null) {
+            tvMessage = null
+            tvNeedsToken = false
+        }
+    }
+
+    /** Skip: leave the current video (its position is saved) and go to the next. */
+    fun skipTv() {
+        val session = tv ?: return
+        if (!finished) reportProgress()
+        tvPerform(session, session.onSkip())
+    }
+
+    /** Ends TV and playback. [message] is shown when TV stopped on its own. */
+    fun stopTv(message: String? = null, needsToken: Boolean = false) {
+        stop() // also ends the session
+        tvMessage = message
+        tvNeedsToken = needsToken
+    }
+
+    /** The TV screen was left with the app on screen: that is a stop. (In the background it plays on, like any video.) */
+    fun leaveTv() {
+        if (appVisible && tv != null) stopTv()
+    }
+
+    /** The task was swiped away: nothing may keep playing or start the next video. */
+    fun taskRemoved() {
+        if (tv != null) stopTv(TV_REMOVED_MESSAGE)
+    }
+
+    private fun endTv() {
+        tv = null
+        tvTicker?.cancel()
+        tvFetch?.cancel()
+        releaseTvWake()
+    }
+
+    private fun tvPerform(session: TvSession, step: TvStep) {
+        if (tv !== session) return
+        when (step) {
+            TvStep.Wait -> {}
+            is TvStep.Fetch -> fetchTv(session, step)
+            is TvStep.Play -> {
+                if (!canStartPlayback(appVisible, keepInBackground)) return stopTv(TV_BACKGROUND_MESSAGE)
+                playedTicks = 0
+                begin(step.pick.video, quality.takeIf { it > 0 } ?: step.pick.quality, "", 0, handOver = true)
+            }
+            is TvStep.Stop -> stopTv(step.message, step.needsToken)
+        }
+    }
+
+    private fun fetchTv(session: TvSession, step: TvStep.Fetch) {
+        tvFetch?.cancel() // the session already ignores an older ticket's answer; this just saves the work
+        if (!step.prefetch) buffering = true
+        tvFetch = scope.launch {
+            if (step.delayMs > 0) delay(step.delayMs)
+            holdTvWake()
+            val outcome = try {
+                val r = api.tvNext(session.after, session.seen, quality.takeIf { it > 0 })
+                session.onFetched(step.ticket, TvPick(r.video, r.channelId.ifEmpty { r.video.channelId }, r.quality))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: AuthException) {
+                session.onFetchFailed(step.ticket, TvFailure.Auth(e.message.orEmpty()))
+            } catch (e: NeedSubscriptionsException) {
+                session.onFetchFailed(step.ticket, TvFailure.NeedSubscriptions(e.message.orEmpty()))
+            } catch (e: Exception) {
+                session.onFetchFailed(step.ticket, TvFailure.Other(e.message ?: "Couldn't reach the server."))
+            } finally {
+                releaseTvWake()
+            }
+            tvPerform(session, outcome)
+        }
+    }
+
+    /** Once a second: ask for the next video when the end is near, and notice that a video really played. */
+    private suspend fun tickTv(session: TvSession) {
+        while (true) {
+            delay(1_000)
+            if (tv !== session || !isPlaying || seek.restarting || seek.totalSeconds <= 0) continue
+            if (++playedTicks >= TV_CONFIRM_SECONDS) session.onProgressed()
+            if (seek.totalSeconds - positionSeconds() <= TV_PREFETCH_SECONDS) tvPerform(session, session.onNearEnd())
+        }
+    }
+
+    // A short partial wake lock around the request for the next video, so a screen-off device cannot doze mid-hand-over.
+    private fun holdTvWake() {
+        val lock = tvWake ?: (context.getSystemService(Context.POWER_SERVICE) as PowerManager)
+            .newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ytclassic:tv").apply { setReferenceCounted(false) }.also { tvWake = it }
+        lock.acquire(30_000)
+    }
+
+    private fun releaseTvWake() {
+        tvWake?.takeIf { it.isHeld }?.release()
+    }
+
+    /** The video failed to play (or the stream was cut short). */
+    private fun tvFailed() {
+        val session = tv ?: return
+        tvPerform(session, session.onPlaybackFailed(error, auth = needsToken))
     }
 
     /**
@@ -226,7 +373,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
      * stream is silenced at once, the base offset only moves when the new stream is handed to the player, and only
      * the newest request may reach the player: a quick second seek must not be overtaken by the first.
      */
-    fun load(at: Long, q: Int = quality, play: Boolean? = null) {
+    fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true) {
         val v = video ?: return
         pendingPlay = play ?: playIntent
         quality = q
@@ -235,7 +382,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         finished = false
         buffering = true
         val start = seek.requestRestart(at)
-        exo.pause()
+        if (silence) exo.pause()
         startService()
         loading?.cancel()
         loading = scope.launch {
@@ -275,6 +422,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** The app went to the background: pause unless background audio is on and something is playing. */
     fun onAppStopped() {
+        if (tv != null && !keepInBackground) return stopTv(TV_BACKGROUND_MESSAGE) // it could not play on anyway
         if (continuesInBackground(keepInBackground, wantsToPlay)) return
         pause()
         if (endsSessionOnAppStop(keepInBackground)) stopService() // no notification or headset button may resume it
@@ -289,6 +437,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** Forget the video and tear everything down, including the service and notification. */
     fun stop() {
+        endTv()
         if (!finished && !seek.restarting) reportProgress() // before the player is torn down
         loading?.cancel()
         seek.failRestart()
@@ -304,11 +453,17 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** Pause and remove the notification and service, but keep the video so the screen can offer Play/Replay/Retry. */
     fun endSession() {
+        endTv() // the notification was dismissed: that is a stop for TV too
         exo.pause()
         stopService()
     }
 
     private fun endIfDone() {
+        val session = tv
+        if (session != null) { // TV: the end of a video is not the end of the session
+            if (finished) tvPerform(session, session.onEnded()) else if (error != null) tvFailed()
+            return
+        }
         if (!endsSession(finished, error != null, appVisible)) return
         // Nobody is on the watch screen any more: forget the video so reopening it starts fresh, not on a stale overlay.
         if (screenAttached) endSession() else stop()

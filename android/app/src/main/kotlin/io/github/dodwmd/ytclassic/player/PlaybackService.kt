@@ -4,6 +4,7 @@ import android.app.PendingIntent
 import androidx.annotation.OptIn
 import androidx.media3.common.util.UnstableApi
 import android.content.Intent
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
@@ -20,6 +21,7 @@ import io.github.dodwmd.ytclassic.MainActivity
 class PlaybackService : MediaSessionService() {
     private var session: MediaSession? = null
 
+    @OptIn(UnstableApi::class)
     override fun onCreate() {
         super.onCreate()
         val open = PendingIntent.getActivity(
@@ -31,6 +33,12 @@ class PlaybackService : MediaSessionService() {
         )
         session = MediaSession.Builder(this, (application as App).host.player).setSessionActivity(open).setCallback(Guard()).build()
         addSession(session!!) // so Media3 builds the notification and runs the service in the foreground
+        // Android may refuse to promote the service from the background; playback then goes on without a notification.
+        setListener(object : Listener {
+            override fun onForegroundServiceStartNotAllowedException() {
+                Log.w("PlaybackService", "Foreground start not allowed: playing on without the notification")
+            }
+        })
     }
 
     /** Only the system's media controls and this app may connect, with [allowedControllerCommands]; items can't be replaced. */
@@ -52,7 +60,7 @@ class PlaybackService : MediaSessionService() {
     override fun onTaskRemoved(rootIntent: Intent?) {
         // Swiped out of recents: keep playing if it is, otherwise nothing is left to keep alive.
         val host = (application as App).host
-        if (!host.wantsToPlay) host.stop()
+        if (host.tv != null) host.taskRemoved() else if (!host.wantsToPlay) host.stop()
         super.onTaskRemoved(rootIntent)
     }
 

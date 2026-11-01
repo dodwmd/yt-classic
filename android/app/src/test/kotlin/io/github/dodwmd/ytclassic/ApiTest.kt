@@ -21,6 +21,7 @@ class ApiTest {
     private lateinit var server: HttpServer
     private val requests = mutableListOf<String>()
     private var lastBody = ""
+    private var tvReply: Pair<Int, String>? = null // overrides the TV answer
     private var importReply: Pair<Int, String>? = null // overrides the import and export answers for the error-path tests
     private lateinit var api: YtApi
 
@@ -54,6 +55,7 @@ class ApiTest {
                     importReply ?: (200 to fixture("import"))
                 }
                 path == "/api/subscriptions/export" -> importReply ?: (200 to "Channel ID,Channel URL,Channel title\r\n")
+                path == "/api/tv/next" -> tvReply ?: (200 to fixture("tv"))
                 path == "/api/html" -> 200 to "<html>not json</html>"
                 else -> 404 to """{"error":"not found"}"""
             }
@@ -286,5 +288,37 @@ class ApiTest {
         assertTrue(assertFailsWith<ApiException> { offline.importSubscriptions(ByteArray(1)) }.message!!.startsWith("Can't reach the server"))
         assertTrue(assertFailsWith<ApiException> { offline.exportSubscriptions("opml") }.message!!.startsWith("Can't reach the server"))
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).also { it.start() } // so @AfterTest has something to stop
+    }
+
+    @Test
+    fun tvNextParsesRealResponseAndSendsAfterAndSeen() = runBlocking {
+        val r = api.tvNext("UC0000000000000000000001", listOf("AAAAAAAAAAA", "BBBBBBBBBBB"))
+        assertEquals("vid3x1zzzzz", r.video.id)
+        assertEquals("UC0000000000000000000003", r.channelId)
+        assertEquals(120, r.video.durationSeconds)
+        assertEquals("GET /api/tv/next?after=UC0000000000000000000001&seen=AAAAAAAAAAA%2CBBBBBBBBBBB", requests.last())
+        api.tvNext("", emptyList())
+        assertEquals("GET /api/tv/next", requests.last(), "no after and no seen on the first request")
+        api.tvNext("UC0000000000000000000001", emptyList(), 480)
+        assertEquals("GET /api/tv/next?after=UC0000000000000000000001&q=480", requests.last(), "the current quality is sent")
+    }
+
+    @Test
+    fun tvNeedSubscriptionsIsATypedErrorWithTheServersMessage() {
+        tvReply = 409 to fixture("tv-need")
+        val e = assertFailsWith<io.github.dodwmd.ytclassic.data.NeedSubscriptionsException> { runBlocking { api.tvNext("", emptyList()) } }
+        assertEquals("Subscribe to 1 more channel to turn on TV.", e.message)
+        assertEquals(4, e.have)
+        assertEquals(5, e.need)
+    }
+
+    @Test
+    fun tvOtherErrorsStayPlainApiExceptions() {
+        tvReply = 404 to """{"error":"Could not find anything playable right now.","code":"nothing-playable"}"""
+        val e = assertFailsWith<ApiException> { runBlocking { api.tvNext("", emptyList()) } }
+        assertEquals("Could not find anything playable right now.", e.message)
+        assertFalse(e is io.github.dodwmd.ytclassic.data.NeedSubscriptionsException)
+        tvReply = 409 to """{"error":"subscription limit reached"}"""
+        assertFalse(assertFailsWith<ApiException> { runBlocking { api.tvNext("", emptyList()) } } is io.github.dodwmd.ytclassic.data.NeedSubscriptionsException)
     }
 }
