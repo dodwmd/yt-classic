@@ -15,6 +15,10 @@ class StreamSeek(val totalSeconds: Long, startSeconds: Long = 0) {
     fun position(playerPositionMs: Long): Long =
         (base + playerPositionMs / 1000).coerceAtMost(maxOf(0, totalSeconds))
 
+    /** True when the stream ended well before the real end, so it was cut short (e.g. the remux died) rather than finished. */
+    fun endedEarly(playerPositionMs: Long, toleranceSeconds: Long = 5): Boolean =
+        totalSeconds > 0 && position(playerPositionMs) < totalSeconds - toleranceSeconds
+
     /** Returns the offset to restart the stream at for a seek to [targetSeconds], and remembers it. */
     fun restartAt(targetSeconds: Long): Long {
         base = targetSeconds.coerceIn(0, maxOf(0, totalSeconds - 1))

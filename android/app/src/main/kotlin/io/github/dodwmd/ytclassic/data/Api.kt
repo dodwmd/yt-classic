@@ -29,6 +29,25 @@ fun normalizeServerUrl(raw: String): HttpUrl? {
     return withScheme.toHttpUrlOrNull()
 }
 
+/**
+ * True when [host] is somewhere cleartext http is reasonable: loopback, a private/link-local/CGNAT (Tailscale) IPv4
+ * range, an IPv6 local address, or a name that can't be on the public internet (no dots, .local, .lan, .home.arpa,
+ * .internal, .ts.net). Used only to warn; the app still connects.
+ */
+fun isPrivateHost(host: String): Boolean {
+    val h = host.trim('[', ']').lowercase()
+    if (h.isEmpty()) return false
+    val v4 = Regex("""(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})""").matchEntire(h)
+    if (v4 != null) {
+        val (a, b) = v4.groupValues[1].toInt() to v4.groupValues[2].toInt()
+        return a == 10 || a == 127 || (a == 172 && b in 16..31) || (a == 192 && b == 168) ||
+            (a == 169 && b == 254) || (a == 100 && b in 64..127)
+    }
+    if (':' in h) return h == "::1" || h.startsWith("fc") || h.startsWith("fd") || h.startsWith("fe80")
+    if ('.' !in h) return true
+    return listOf(".local", ".lan", ".home.arpa", ".internal", ".ts.net").any { h.endsWith(it) }
+}
+
 val ApiJson = Json {
     ignoreUnknownKeys = true
     coerceInputValues = true

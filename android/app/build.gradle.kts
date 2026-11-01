@@ -27,6 +27,15 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    buildTypes {
+        release {
+            // Shrink and obfuscate the release build; not signed here (add a signingConfig when publishing).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+        }
+    }
+
     lint {
         abortOnError = true
         warningsAsErrors = false
