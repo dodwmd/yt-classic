@@ -1,7 +1,15 @@
 package io.github.dodwmd.ytclassic.player
 
 import androidx.annotation.OptIn
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -68,6 +76,8 @@ fun StreamPlayer(
     lang: String,
     startSeconds: Long,
     onPosition: (Long) -> Unit,
+    fullscreen: Boolean,
+    onFullscreen: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -80,6 +90,10 @@ fun StreamPlayer(
     var error by remember(video.id) { mutableStateOf<String?>(null) }
     var finished by remember(video.id) { mutableStateOf(false) }
     var dragging by remember(video.id) { mutableStateOf<Float?>(null) }
+
+    var controlsVisible by remember(video.id) { mutableStateOf(true) }
+    FullscreenEffect(fullscreen)
+    BackHandler(enabled = fullscreen) { onFullscreen(false) }
 
     val player = remember(video.id) {
         ExoPlayer.Builder(context)
@@ -154,30 +168,13 @@ fun StreamPlayer(
         }
     }
 
-    Column(modifier) {
-        // In landscape a full-width 16:9 box would fill the screen; cap its height so the details stay reachable.
-        val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.6f).toDp() }
-        Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
-          Box(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f)) {
-            AndroidView(
-                factory = { ctx -> PlayerView(ctx).apply { useController = false } },
-                update = { it.player = player },
-                modifier = Modifier.matchParentSize(),
-            )
-            if (buffering && error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
-            error?.let { message ->
-                Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(message, color = Color.White)
-                    Button(onClick = { load(positionSec) }) { Text("Retry") }
-                }
-            }
-          }
-        }
+    val textColor = if (fullscreen) Color.White else LocalContentColor.current
+    val transport: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(
                 onClick = { if (finished) load(0) else if (isPlaying) player.pause() else player.play() },
                 modifier = Modifier.semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
-            ) { Text(if (finished) "↻" else if (isPlaying) "❚❚" else "▶") }
+            ) { Text(if (finished) "↻" else if (isPlaying) "❚❚" else "▶", color = textColor) }
             if (total > 0) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
@@ -192,12 +189,58 @@ fun StreamPlayer(
                         stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}"
                     },
                 )
-                Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", modifier = Modifier.padding(end = 8.dp))
+                Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
+            }
+            TextButton(
+                onClick = { onFullscreen(!fullscreen) },
+                modifier = Modifier.semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
+            ) { Text(if (fullscreen) "⤡" else "⤢", color = textColor) }
+        }
+    }
+    val videoView: @Composable (Modifier) -> Unit = { m ->
+        Box(m) {
+            AndroidView(
+                factory = { ctx -> PlayerView(ctx).apply { useController = false } },
+                update = { it.player = player },
+                modifier = Modifier.matchParentSize(),
+            )
+            if (buffering && error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            error?.let { message ->
+                Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(message, color = Color.White)
+                    Button(onClick = { load(positionSec) }) { Text("Retry") }
+                }
             }
         }
-        Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            for (q in qualities) {
-                FilterChip(selected = q == quality, onClick = { if (q != quality) { quality = q; load(positionSec, q) } }, label = { Text("${q}p") })
+    }
+
+    if (fullscreen) {
+        // The video fills the screen; tap it to show or hide the controls laid over the bottom.
+        Box(modifier.fillMaxSize().background(Color.Black)) {
+            videoView(
+                Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
+                    controlsVisible = !controlsVisible
+                },
+            )
+            if (controlsVisible) {
+                Column(
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.55f))
+                        .windowInsetsPadding(WindowInsets.safeDrawing),
+                ) { transport() }
+            }
+        }
+    } else {
+        Column(modifier) {
+            // In landscape a full-width 16:9 box would fill the screen; cap its height so the details stay reachable.
+            val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.6f).toDp() }
+            Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+                videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f))
+            }
+            transport()
+            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                for (q in qualities) {
+                    FilterChip(selected = q == quality, onClick = { if (q != quality) { quality = q; load(positionSec, q) } }, label = { Text("${q}p") })
+                }
             }
         }
     }
