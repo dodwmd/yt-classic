@@ -55,4 +55,5 @@ export function initPlayer(root) {
     else if (e.key === "ArrowRight") seek(now() + 10);
   });
   paint();
+  return now; // current position in seconds, for progress reporting
 }

@@ -51,7 +51,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");

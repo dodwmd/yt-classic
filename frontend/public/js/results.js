@@ -1,4 +1,4 @@
-import { $, api, channelHref, clone, run, safeImg, setTitle, watchHref } from "./lib.js";
+import { $, api, channelHref, clone, markWatched, run, safeImg, setTitle, watchHref } from "./lib.js";
 import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 const params = new URLSearchParams(location.search);
@@ -35,6 +35,7 @@ run(async () => {
     $(".desc", row).textContent = v.description;
     $("#results").append(row);
   }
+  markWatched();
   for (const [id, tok] of [["prev", page.prevPageToken], ["next", page.nextPageToken]]) {
     if (!tok) continue;
     $(`#${id}`).href = `/results?${new URLSearchParams({ search_query: q, pageToken: tok })}`;

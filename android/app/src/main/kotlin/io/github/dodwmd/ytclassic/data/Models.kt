@@ -1,5 +1,6 @@
 package io.github.dodwmd.ytclassic.data
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
 // These mirror the backend's JSON (see backend/src/app.ts). Optional fields are nullable or defaulted because
@@ -73,7 +74,37 @@ data class RelatedList(val heading: String = "", val items: List<RelatedItem> = 
 data class HomeResponse(
     val subs: List<Sub> = emptyList(),
     val feed: List<FeedItem> = emptyList(),
+    /** Unfinished videos to pick up again, most recent first. */
+    @SerialName("continue") val resume: List<HistoryItem> = emptyList(),
 )
+
+/** Where the server last saw this video: [position] in seconds. */
+@Serializable
+data class Progress(val position: Long = 0, val completed: Boolean = false)
+
+/** One watched video; title and channel come from the server's own metadata. */
+@Serializable
+data class HistoryItem(
+    val id: String,
+    val title: String,
+    val channelId: String = "",
+    val channelTitle: String = "",
+    val thumb: String = "",
+    val durationSeconds: Long = 0,
+    val position: Long = 0,
+    val completed: Boolean = false,
+    val lastWatched: Long = 0,
+    val watchCount: Int = 0,
+) {
+    /** 0..1, or null when the length is unknown or the video is finished. */
+    val fraction: Float? get() = if (completed || durationSeconds <= 0) null else (position.toFloat() / durationSeconds).coerceIn(0f, 1f)
+}
+
+@Serializable
+data class HistoryPage(val items: List<HistoryItem> = emptyList(), val next: Long? = null)
+
+@Serializable
+data class WatchedResponse(val ids: List<String> = emptyList())
 
 @Serializable
 data class VideoResponse(
@@ -82,6 +113,7 @@ data class VideoResponse(
     val quality: Int = 720,
     val qualities: List<Int> = listOf(360, 480, 720, 1080),
     val lang: String = "",
+    val progress: Progress? = null,
 )
 
 @Serializable

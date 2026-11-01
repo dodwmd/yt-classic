@@ -78,6 +78,30 @@ class YtApi(
         return decode<SubscribeResponse>(execute(req)).subscribed
     }
 
+    /** Tells the server where playback is. The caller treats failure as unimportant. */
+    suspend fun reportProgress(id: String, positionSeconds: Long, finished: Boolean = false) {
+        val body = FormBody.Builder().add("id", id).add("position", positionSeconds.toString()).apply { if (finished) add("finished", "1") }.build()
+        execute(Request.Builder().url(url("api/progress")).post(body).build()).use { }
+    }
+
+    suspend fun history(before: Long? = null): HistoryPage = get("api/history", "limit" to "48", "before" to before?.toString())
+
+    /** Which of [ids] (at most 100) were watched to the end. */
+    suspend fun watched(ids: List<String>): Set<String> =
+        get<WatchedResponse>("api/history/watched", "ids" to ids.take(100).joinToString(",")).ids.toSet()
+
+    suspend fun removeFromHistory(id: String) {
+        execute(Request.Builder().url(url("api/history/$id")).delete().build()).use { check(it) }
+    }
+
+    suspend fun clearHistory() {
+        execute(Request.Builder().url(url("api/history/clear")).post(FormBody.Builder().build()).build()).use { check(it) }
+    }
+
+    private fun check(r: Response) {
+        if (!r.isSuccessful) throw ApiException("Request failed (${r.code})")
+    }
+
     /** Checks that the configured server answers; used by the settings screen. */
     suspend fun ping(): Boolean = try {
         execute(Request.Builder().url(url("healthz")).build()).use { it.isSuccessful }

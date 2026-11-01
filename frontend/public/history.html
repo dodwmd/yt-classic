@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>History - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<script type="module" src="/static/js/history.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to load its data.</p></noscript>
+  <p id="status" role="status">Loading&hellip;</p>
+  <div id="history" hidden>
+    <h2>Watch history</h2>
+    <div id="hist-bar">
+      <span>Kept only on this server, nowhere else.</span>
+      <button type="button" id="clear">Clear all history</button>
+    </div>
+    <p id="none" hidden>Nothing watched yet.</p>
+    <div class="grid" id="hist-grid"></div>
+    <p><button type="button" id="more" hidden>Load more</button></p>
+  </div>
+</div>
+<template id="t-card">
+  <div class="card">
+    <a class="thumb"><img width="160" height="90" alt=""><span class="dur" hidden></span></a>
+    <a class="title"></a>
+    <div class="sub"><a class="chan" hidden></a><span class="byline" hidden></span><br><span class="meta"></span></div>
+  </div>
+</template>
+</body>
+</html>

@@ -21,5 +21,19 @@
       "channelTitle": "Dryfly Outdoors",
       "publishedAt": "2026-10-30T23:36:31Z"
     }
+  ],
+  "continue": [
+    {
+      "id": "dQw4w9WgXcQ",
+      "title": "Half watched video",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Some channel",
+      "thumb": "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+      "durationSeconds": 600,
+      "position": 240,
+      "completed": false,
+      "lastWatched": 1793542868467,
+      "watchCount": 0
+    }
   ]
 }

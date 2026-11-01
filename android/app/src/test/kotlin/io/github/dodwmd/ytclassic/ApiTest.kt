@@ -20,6 +20,7 @@ import kotlin.test.assertTrue
 class ApiTest {
     private lateinit var server: HttpServer
     private val requests = mutableListOf<String>()
+    private var lastBody = ""
     private lateinit var api: YtApi
 
     private fun fixture(name: String) = javaClass.getResource("/$name.json")!!.readText()
@@ -29,6 +30,7 @@ class ApiTest {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { ex ->
             requests += "${ex.requestMethod} ${ex.requestURI}"
+            lastBody = ex.requestBody.readBytes().decodeToString()
             val path = ex.requestURI.path
             val (status, body) = when {
                 path == "/healthz" -> 200 to "ok"
@@ -37,6 +39,11 @@ class ApiTest {
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
                 path == "/api/video/bad" -> 400 to """{"error":"bad video id"}"""
                 path.startsWith("/api/channel/") -> 200 to fixture("channel")
+                path == "/api/history" -> 200 to fixture("history")
+                path == "/api/history/watched" -> 200 to fixture("watched")
+                path == "/api/progress" -> 200 to """{"recorded":true}"""
+                path == "/api/history/clear" -> 200 to """{"removed":2}"""
+                path.startsWith("/api/history/") -> 200 to """{"removed":true}"""
                 path == "/api/subscribe" -> 200 to """{"subscribed":true}"""
                 path == "/api/unsubscribe" -> 200 to """{"subscribed":false}"""
                 path == "/api/html" -> 200 to "<html>not json</html>"
@@ -153,5 +160,53 @@ class ApiTest {
         assertEquals("https://yt.example.com/", normalizeServerUrl(" https://yt.example.com/ ")?.toString())
         assertNull(normalizeServerUrl(""))
         assertNull(normalizeServerUrl("http://"))
+    }
+
+    @Test
+    fun homeAndVideoCarryResumeData() = runBlocking {
+        val home = api.home()
+        assertEquals("Half watched video", home.resume.single().title)
+        assertEquals(0.4f, home.resume.single().fraction)
+        val v = api.video("dQw4w9WgXcQ")
+        assertEquals(240L, v.progress?.position)
+        assertFalse(v.progress!!.completed)
+    }
+
+    @Test
+    fun historyParsesRealResponse() = runBlocking {
+        val page = api.history(before = 123)
+        assertEquals("GET /api/history?limit=48&before=123", requests.last())
+        assertEquals(2, page.items.size)
+        assertTrue(page.items.first().completed)
+        assertNull(page.items.first().fraction) // finished: no bar
+        assertNull(page.next)
+    }
+
+    @Test
+    fun watchedLookupSendsIdsAndReturnsASet() = runBlocking {
+        assertEquals(setOf("aaaaaaaaaaa"), api.watched(listOf("aaaaaaaaaaa", "dQw4w9WgXcQ")))
+        assertEquals("GET /api/history/watched?ids=aaaaaaaaaaa,dQw4w9WgXcQ".replace(",", "%2C"), requests.last())
+    }
+
+    @Test
+    fun reportProgressPostsAFormWithOnlyIdPositionFinished() = runBlocking {
+        api.reportProgress("dQw4w9WgXcQ", 42)
+        assertEquals("POST /api/progress", requests.last())
+        assertEquals("id=dQw4w9WgXcQ&position=42", lastBody)
+        api.reportProgress("dQw4w9WgXcQ", 214, finished = true)
+        assertEquals("id=dQw4w9WgXcQ&position=214&finished=1", lastBody)
+    }
+
+    @Test
+    fun removeAndClearHistory() = runBlocking {
+        api.removeFromHistory("dQw4w9WgXcQ")
+        assertEquals("DELETE /api/history/dQw4w9WgXcQ", requests.last())
+        api.clearHistory()
+        assertEquals("POST /api/history/clear", requests.last())
+    }
+
+    @Test
+    fun reportingToAnUnreachableServerThrowsApiExceptionForTheCallerToIgnore() {
+        assertFailsWith<ApiException> { runBlocking { YtApi(server = { "127.0.0.1:1" }).reportProgress("dQw4w9WgXcQ", 10) } }
     }
 }

@@ -60,5 +60,37 @@ export function cardNode(c) {
     b.hidden = false;
   }
   $(".meta", n).textContent = c.meta || "";
+  if (c.pct) progressBar($(".thumb", n), c.pct);
   return n;
+}
+
+/** A thin bar along the bottom of a thumbnail; the width is set through the CSSOM, never as inline HTML. */
+function progressBar(thumb, pct) {
+  const bar = document.createElement("span");
+  bar.className = "prog";
+  bar.append(document.createElement("i"));
+  bar.firstChild.style.width = `${Math.min(100, Math.max(0, pct))}%`;
+  thumb.append(bar);
+}
+
+/** Percent watched for a history item (0 when the length is unknown). */
+export const pctOf = (h) => (h.durationSeconds ? Math.round((100 * h.position) / h.durationSeconds) : 0);
+
+/** Adds a "Watched" badge to every video thumbnail on the page that has been watched to the end. Never fails the page. */
+export async function markWatched() {
+  try {
+    const thumbs = [...document.querySelectorAll('.thumb[href^="/watch?v="]')].slice(0, 100);
+    const id = (a) => new URLSearchParams(a.search).get("v");
+    if (!thumbs.length) return;
+    const { ids } = await api(`/api/history/watched?ids=${thumbs.map(id).join(",")}`);
+    for (const a of thumbs) {
+      if (!ids.includes(id(a))) continue;
+      const b = document.createElement("span");
+      b.className = "badge";
+      b.textContent = "Watched";
+      a.append(b);
+    }
+  } catch {
+    // badges are a nicety
+  }
 }

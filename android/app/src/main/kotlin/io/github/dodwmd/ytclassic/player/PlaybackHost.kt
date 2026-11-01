@@ -25,6 +25,7 @@ import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 /**
@@ -49,6 +50,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private var loading: Job? = null
     private var pendingPlay = false // whether the pending restart should start playing
     private var lang = ""
+    private var lastReported = -1L // the last position sent to the server
     private var screenAttached = false // the watch screen for [video] is in composition
 
     /** The video being played, or null when nothing is. Set by [open], cleared by [stop]. */
@@ -124,9 +126,17 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     val wantsToPlay: Boolean get() = video != null && error == null && !finished && playIntent
 
     init {
+        // While playing, tell the server every 10 s. Runs on the app scope, so it also works with the screen off.
+        scope.launch {
+            while (true) {
+                delay(10_000)
+                if (isPlaying && !seek.restarting) reportProgress()
+            }
+        }
         exo.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 this@PlaybackHost.isPlaying = isPlaying
+                if (!isPlaying && !seek.restarting) reportProgress() // paused or stopped
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -136,7 +146,10 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
                     when (seek.endOutcome(exo.currentPosition)) {
                         StreamEnd.Stale -> return // the old stream, while a restart is pending
                         StreamEnd.CutShort -> error = "The stream stopped early."
-                        StreamEnd.Finished -> finished = true
+                        StreamEnd.Finished -> {
+                            finished = true
+                            reportProgress(finished = true)
+                        }
                     }
                     endIfDone()
                 }
@@ -154,11 +167,30 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
     fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
         if (video?.id == v.id) return
+        lastReported = -1L
         video = v
         lang = audioLang
         seek = StreamSeek(v.durationSeconds ?: 0L, startSeconds)
         screenAttached = true
         load(startSeconds, initialQuality, play = true)
+    }
+
+    /**
+     * Fire and forget: the server keeps the resume position and the history. A failure (offline, server down) is
+     * ignored on purpose; it must never affect playback.
+     */
+    private fun reportProgress(finished: Boolean = false) {
+        val v = video ?: return
+        val position = positionSeconds()
+        if (!shouldReport(position, lastReported, finished)) return
+        lastReported = position
+        scope.launch {
+            try {
+                api.reportProgress(v.id, position, finished)
+            } catch (e: Exception) {
+                Log.d("PlaybackHost", "progress not saved: ${e.javaClass.simpleName}")
+            }
+        }
     }
 
     /** Absolute position in whole seconds. */
@@ -228,6 +260,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** Forget the video and tear everything down, including the service and notification. */
     fun stop() {
+        if (!finished && !seek.restarting) reportProgress() // before the player is torn down
         loading?.cancel()
         seek.failRestart()
         exo.stop()
