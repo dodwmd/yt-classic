@@ -79,7 +79,8 @@ as the other POST routes) and detects the format itself. The whole import is one
 Response: `added` (new), `existing` (already subscribed, or repeated in the file; left unchanged), `skipped.invalid` (not
 a channel id), `skipped.handles` (`@handle`, `/c/` and `/user/` links: resolving those needs the Data API, so they are
 skipped, not guessed), `skipped.full` (not added because the 500-subscription limit was reached) and `total` (your
-subscriptions after the import). A body with nothing recognisable gets 400.
+subscriptions after the import). A `message` field holds the same result as one sentence for display. A body with nothing
+recognisable gets 400.
 
 `GET /api/subscriptions/export?format=csv|opml` downloads your subscriptions (`Content-Disposition: attachment`,
 `subscriptions.csv` / `subscriptions.opml`) in the Takeout CSV shape or as OPML; both import back unchanged here.
