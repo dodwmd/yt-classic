@@ -39,6 +39,14 @@ fun formatViews(n: String?): String {
 /** Display strings from the watch-next feed ("1.2M", "3K watching"): add "views" only when it isn't there. */
 fun viewsText(v: String): String = if (Regex("view|watching", RegexOption.IGNORE_CASE).containsMatchIn(v)) v else "$v views"
 
+/** What a stream's state is called on the Live tab; empty for an ordinary video. */
+fun liveLabel(live: String?): String = when (live) {
+    "live" -> "Live now"
+    "upcoming" -> "Upcoming"
+    "ended" -> "Past stream"
+    else -> ""
+}
+
 fun joinParts(vararg parts: String?): String = parts.filter { !it.isNullOrEmpty() }.joinToString(" · ")
 
 /** The rows of the Status screen, mirroring frontend/public/js/status.js. */

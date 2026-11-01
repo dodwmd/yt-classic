@@ -2,7 +2,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { channel, channelVideos, video } from "./yt/api.ts";
+import { YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, video } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
@@ -419,12 +419,23 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   }
 
   if (path.startsWith("/api/channel/")) {
-    const id = path.slice("/api/channel/".length);
+    const [id, tab, pid, ...extra] = path.slice("/api/channel/".length).split("/");
     if (!CHANNEL_ID.test(id)) return json(res, 400, { error: "bad channel id" });
     const token = param("pageToken");
     if (token.length > 200) return json(res, 400, { error: "bad page token" });
+    const tabs = ["playlists", "playlist", "shorts", "live", "about"];
+    if (tab !== undefined && (!tabs.includes(tab) || extra.length || (tab === "playlist") !== (pid !== undefined))) return json(res, 404, { error: "not found" });
+    if (tab === "playlist" && !YT_PLAYLIST_ID.test(pid)) return json(res, 400, { error: "bad playlist id" });
     const c = await channel(id); // resolve first so an unknown channel is a clean 404, not an upstream error
     if (!c) return json(res, 404, { error: "channel not found" });
+    if (tab === "playlists") return json(res, 200, { page: await channelPlaylists(id, token) });
+    if (tab === "playlist") {
+      const pl = await ownedPlaylist(id, pid);
+      if (!pl) return json(res, 404, { error: "playlist not found" });
+      return json(res, 200, { playlist: pl, page: await playlistVideos(id, pid, token) });
+    }
+    if (tab === "shorts" || tab === "live") return json(res, 200, { page: await channelKind(id, tab, token) });
+    if (tab === "about") return json(res, 200, { about: await channelAbout(id) });
     const [page, subs] = await Promise.all([channelVideos(id, token), listSubs()]);
     return json(res, 200, { channel: c, page, subscribed: subs.some((s) => s.id === id) });
   }

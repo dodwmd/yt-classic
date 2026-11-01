@@ -44,6 +44,8 @@ data class VideoSummary(
     val thumb: String = "",
     val durationSeconds: Long? = null,
     val views: String? = null,
+    /** On the channel's Shorts/Live tabs: "live", "upcoming" or "ended" for streams. */
+    val live: String? = null,
 )
 
 @Serializable
@@ -162,6 +164,51 @@ data class Channel(
 
 @Serializable
 data class ChannelResponse(val channel: Channel, val page: SearchPage = SearchPage(), val subscribed: Boolean = false)
+
+/** One of a channel's public playlists (the Playlists tab). */
+@Serializable
+data class ChannelPlaylist(
+    val id: String,
+    val title: String = "",
+    val description: String = "",
+    val thumb: String = "",
+    val itemCount: Int? = null,
+    val publishedAt: String = "",
+)
+
+@Serializable
+data class ChannelPlaylists(val items: List<ChannelPlaylist> = emptyList(), val nextPageToken: String? = null)
+
+@Serializable
+data class ChannelPlaylistsResponse(val page: ChannelPlaylists = ChannelPlaylists())
+
+/** Shorts and Live tabs. */
+@Serializable
+data class ChannelTabResponse(val page: SearchPage = SearchPage())
+
+@Serializable
+data class PlaylistRef(val id: String, val title: String = "")
+
+/** The videos of one of the channel's playlists. */
+@Serializable
+data class ChannelPlaylistResponse(val playlist: PlaylistRef, val page: SearchPage = SearchPage())
+
+@Serializable
+data class ChannelAbout(
+    val id: String,
+    val title: String = "",
+    val description: String = "",
+    val customUrl: String? = null,
+    val publishedAt: String? = null,
+    val country: String? = null,
+    val viewCount: String? = null,
+    val subscriberCount: String? = null,
+    val videoCount: String? = null,
+    val links: List<String> = emptyList(),
+)
+
+@Serializable
+data class ChannelAboutResponse(val about: ChannelAbout)
 
 @Serializable
 data class SubscribeResponse(val subscribed: Boolean)

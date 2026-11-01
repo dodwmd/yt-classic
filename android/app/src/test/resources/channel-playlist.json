@@ -1,0 +1,29 @@
+{
+  "playlist": {
+    "id": "PL11zzzzzzzzzzzzzz",
+    "title": "100 Seconds of Code"
+  },
+  "page": {
+    "items": [
+      {
+        "id": "v0000000001",
+        "title": "Video 1",
+        "channelId": "UCsBjURrPoezykLs9EqgamOA",
+        "channelTitle": "Fireship",
+        "description": "",
+        "publishedAt": "2024-01-01T00:00:00Z",
+        "thumb": "https://i.ytimg.com/vi/v0000000001/mqdefault.jpg"
+      },
+      {
+        "id": "v0000000003",
+        "title": "Video 3",
+        "channelId": "UCsBjURrPoezykLs9EqgamOA",
+        "channelTitle": "Fireship",
+        "description": "",
+        "publishedAt": "2024-01-01T00:00:00Z",
+        "thumb": "https://i.ytimg.com/vi/v0000000003/mqdefault.jpg"
+      }
+    ],
+    "nextPageToken": "I2"
+  }
+}

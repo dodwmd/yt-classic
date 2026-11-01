@@ -160,3 +160,191 @@ export async function channelVideos(channelId: string, pageToken = ""): Promise<
     return { items, nextPageToken: data.nextPageToken, prevPageToken: data.prevPageToken };
   }, true);
 }
+
+// --- Channel tabs ---------------------------------------------------------------------------------------------
+
+/** A public playlist id as the Data API hands them out (PL..., OL..., UU..., FL...): strict, so nothing odd reaches the API. */
+export const YT_PLAYLIST_ID = /^[A-Za-z]{2}[\w-]{8,62}$/;
+
+export interface PlaylistSummary {
+  id: string;
+  title: string;
+  description: string;
+  thumb: string;
+  itemCount?: number;
+  publishedAt: string;
+}
+export interface PlaylistPage {
+  items: PlaylistSummary[];
+  nextPageToken?: string;
+}
+export interface TabVideo extends VideoSummary {
+  /** "live" or "upcoming" for current/scheduled streams, "ended" for finished ones; absent for ordinary uploads. */
+  live?: "live" | "upcoming" | "ended";
+}
+export interface TabPage {
+  items: TabVideo[];
+  nextPageToken?: string;
+}
+export interface ChannelAbout {
+  id: string;
+  title: string;
+  description: string;
+  customUrl?: string;
+  publishedAt?: string;
+  country?: string;
+  viewCount?: string;
+  subscriberCount?: string;
+  videoCount?: string;
+  links: string[];
+}
+
+const HOUR = 60 * 60_000;
+const SHORT_MAX_SECONDS = 61;
+/** Shorts/Live scan at most this many uploads pages (50 videos each) per request: 2 quota units a page. */
+export const MAX_SCAN_PAGES = 3;
+const WANT_ITEMS = 12;
+
+/** A playlistItems page of a playlist that does not exist (a channel with no uploads yet) is simply empty. */
+async function playlistItemsPage(playlistId: string, pageToken: string, maxResults: number): Promise<any> {
+  const params: Record<string, string> = { part: "snippet", playlistId, maxResults: String(maxResults) };
+  if (pageToken) params.pageToken = pageToken;
+  try {
+    return await call("playlistItems", params); // 1 unit
+  } catch (e) {
+    if (/failed: 404/.test((e as Error).message)) return { items: [] };
+    throw e;
+  }
+}
+
+const thumbOf = (s: any, id: string) => s?.thumbnails?.medium?.url ?? s?.thumbnails?.default?.url ?? `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+const hidden = (s: any) => s?.title === "Private video" || s?.title === "Deleted video";
+
+export function channelPlaylists(channelId: string, pageToken = ""): Promise<PlaylistPage> {
+  return cached(`chplaylists:${channelId}:${pageToken}`, 30 * 60_000, async () => {
+    const params: Record<string, string> = { part: "snippet,contentDetails", channelId, maxResults: "24" };
+    if (pageToken) params.pageToken = pageToken;
+    const data = await call("playlists", params); // 1 unit
+    const items: PlaylistSummary[] = (data.items ?? []).map((p: any) => ({
+      id: p.id,
+      title: p.snippet?.title ?? "",
+      description: p.snippet?.description ?? "",
+      thumb: p.snippet?.thumbnails?.medium?.url ?? p.snippet?.thumbnails?.default?.url ?? "",
+      itemCount: typeof p.contentDetails?.itemCount === "number" ? p.contentDetails.itemCount : undefined,
+      publishedAt: p.snippet?.publishedAt ?? "",
+    }));
+    return { items, nextPageToken: data.nextPageToken };
+  }, true);
+}
+
+/** The playlist's title if it belongs to this channel, else null (so the route can't be used to browse other people's playlists). */
+export function ownedPlaylist(channelId: string, playlistId: string): Promise<{ id: string; title: string } | null> {
+  return cached(`chplaylist:${playlistId}`, HOUR, async () => {
+    const data = await call("playlists", { part: "snippet", id: playlistId }); // 1 unit
+    const p = data.items?.[0];
+    return p ? { id: p.id, title: p.snippet?.title ?? "", channelId: p.snippet?.channelId ?? "" } : null;
+  }, true).then((p: any) => (p && p.channelId === channelId ? { id: p.id, title: p.title } : null));
+}
+
+export function playlistVideos(channelId: string, playlistId: string, pageToken = ""): Promise<SearchPage> {
+  return cached(`plitems:${playlistId}:${pageToken}`, TEN_MIN, async () => {
+    const data = await playlistItemsPage(playlistId, pageToken, 24);
+    const items: VideoSummary[] = (data.items ?? [])
+      .filter((i: any) => i.snippet?.resourceId?.videoId && !hidden(i.snippet))
+      .map((i: any) => ({
+        id: i.snippet.resourceId.videoId,
+        title: i.snippet.title,
+        channelId: i.snippet.videoOwnerChannelId ?? channelId,
+        channelTitle: i.snippet.videoOwnerChannelTitle ?? "",
+        description: i.snippet.description ?? "",
+        publishedAt: i.snippet.publishedAt,
+        thumb: thumbOf(i.snippet, i.snippet.resourceId.videoId),
+      }));
+    return { items, nextPageToken: data.nextPageToken };
+  }, true);
+}
+
+/** One uploads page (50 videos) with durations and live state: 2 quota units, shared by the Shorts and Live tabs. */
+function scannedUploads(channelId: string, pageToken: string): Promise<TabPage> {
+  return cached(`chscan:${channelId}:${pageToken}`, TEN_MIN, async () => {
+    const data = await playlistItemsPage("UU" + channelId.slice(2), pageToken, 50);
+    const base = (data.items ?? []).filter((i: any) => i.snippet?.resourceId?.videoId && !hidden(i.snippet));
+    const ids: string[] = base.map((i: any) => i.snippet.resourceId.videoId);
+    const details = new Map<string, any>();
+    if (ids.length) {
+      const d = await call("videos", { part: "contentDetails,liveStreamingDetails,snippet", id: ids.join(",") }); // 1 unit for up to 50 ids
+      for (const v of d.items ?? []) details.set(v.id, v);
+    }
+    const items: TabVideo[] = [];
+    for (const i of base) {
+      const id: string = i.snippet.resourceId.videoId;
+      const v = details.get(id);
+      if (!v) continue; // not visible any more
+      const state = v.snippet?.liveBroadcastContent;
+      const live = state === "live" || state === "upcoming" ? state : v.liveStreamingDetails ? "ended" : undefined;
+      items.push({
+        id,
+        title: i.snippet.title,
+        channelId,
+        channelTitle: i.snippet.videoOwnerChannelTitle ?? "",
+        description: i.snippet.description ?? "",
+        publishedAt: i.snippet.publishedAt,
+        thumb: thumbOf(i.snippet, id),
+        durationSeconds: isoSeconds(v.contentDetails?.duration),
+        live,
+      });
+    }
+    return { items, nextPageToken: data.nextPageToken };
+  });
+}
+
+/** Shorts or Live from the uploads: scans up to MAX_SCAN_PAGES pages until it has enough, then hands back the token to continue from. */
+export async function channelKind(channelId: string, kind: "shorts" | "live", pageToken = ""): Promise<TabPage> {
+  const match = (v: TabVideo) => (kind === "shorts" ? !v.live && v.durationSeconds! > 0 && v.durationSeconds! <= SHORT_MAX_SECONDS : v.live !== undefined);
+  const items: TabVideo[] = [];
+  let token = pageToken;
+  let next: string | undefined;
+  for (let n = 0; n < MAX_SCAN_PAGES; n++) {
+    const page = await scannedUploads(channelId, token);
+    items.push(...page.items.filter(match));
+    next = page.nextPageToken;
+    if (!next || items.length >= WANT_ITEMS) break;
+    token = next;
+  }
+  return { items, nextPageToken: next };
+}
+
+/** Links are the http(s) URLs in the description: the Data API has no channel links field. */
+export function descriptionLinks(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/https?:\/\/[^\s<>"')\]]+/gi)) {
+    const u = m[0].replace(/[.,;:!?]+$/, "");
+    try {
+      const p = new URL(u);
+      if ((p.protocol === "http:" || p.protocol === "https:") && !out.includes(p.href) && u.length <= 300) out.push(p.href);
+    } catch { /* not a URL */ }
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+export function channelAbout(id: string): Promise<ChannelAbout | null> {
+  return cached(`chabout:${id}`, HOUR, async () => {
+    const data = await call("channels", { part: "snippet,statistics,brandingSettings", id }); // 1 unit
+    const c = data.items?.[0];
+    if (!c) return null;
+    const description = String(c.snippet?.description ?? "");
+    return {
+      id: c.id,
+      title: c.snippet?.title ?? "",
+      description,
+      customUrl: c.snippet?.customUrl,
+      publishedAt: c.snippet?.publishedAt,
+      country: c.snippet?.country ?? c.brandingSettings?.channel?.country,
+      viewCount: c.statistics?.viewCount,
+      subscriberCount: c.statistics?.hiddenSubscriberCount ? undefined : c.statistics?.subscriberCount,
+      videoCount: c.statistics?.videoCount,
+      links: descriptionLinks(description),
+    };
+  }, true);
+}

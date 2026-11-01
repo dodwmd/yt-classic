@@ -94,6 +94,18 @@ class YtApi(
     suspend fun channel(id: String, pageToken: String? = null): ChannelResponse =
         get("api/channel/$id", "pageToken" to pageToken)
 
+    suspend fun channelPlaylists(id: String, pageToken: String? = null): ChannelPlaylists =
+        get<ChannelPlaylistsResponse>("api/channel/$id/playlists", "pageToken" to pageToken).page
+
+    suspend fun channelPlaylist(id: String, playlistId: String, pageToken: String? = null): ChannelPlaylistResponse =
+        get("api/channel/$id/playlist/$playlistId", "pageToken" to pageToken)
+
+    /** [tab] is "shorts" or "live". */
+    suspend fun channelTab(id: String, tab: String, pageToken: String? = null): SearchPage =
+        get<ChannelTabResponse>("api/channel/$id/$tab", "pageToken" to pageToken).page
+
+    suspend fun channelAbout(id: String): ChannelAbout = get<ChannelAboutResponse>("api/channel/$id/about").about
+
     suspend fun status(): StatusResponse = get("api/status")
 
     /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */

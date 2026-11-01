@@ -16,6 +16,12 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
 ## Features
 
+- **Channel tabs** (web `?tab=videos|playlists|shorts|live|about`, Android tab row): Videos (uploads), Playlists (the channel's
+  public playlists, each opens its videos; nothing auto-advances), Shorts (uploads of 61 s or less), Live (current,
+  upcoming and past streams) and About (description, handle, join date, country, view/subscriber counts, links found in the
+  description). Shorts and Live scan at most 3 uploads pages (2 Data API units each) per request and are cached.
+  `GET /api/channel/:id/playlists`, `/playlist/:playlistId` (only playlists owned by that channel), `/shorts`, `/live`
+  (all take `?pageToken=`) and `/about`.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts.
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
