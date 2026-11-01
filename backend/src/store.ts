@@ -10,9 +10,13 @@ export interface Subscription {
 
 export const CHANNEL_ID = /^UC[\w-]{22}$/;
 export const MAX_SUBS = 500;
+export const MAX_TITLE = 200;
 
 const isSub = (s: unknown): s is Subscription =>
   !!s && typeof s === "object" && typeof (s as Subscription).id === "string" && typeof (s as Subscription).title === "string";
+// The id ends up unencoded in the RSS URL, so only well-formed channel ids are ever stored.
+const clean = (s: Subscription): Subscription | null =>
+  CHANNEL_ID.test(s.id) ? { id: s.id, title: s.title.slice(0, MAX_TITLE) } : null;
 
 /**
  * One-time import of the pre-SQLite subscriptions.json. The file is renamed afterwards; a meta row records the
@@ -47,17 +51,20 @@ function importLegacyJson(db: DatabaseSync): void {
     console.error(`subscriptions.json is unreadable (${(e as Error).message}); moved to ${bak}`);
     return rename(bak, "corrupt");
   }
+  const valid = subs.map(clean).filter((s): s is Subscription => s !== null);
+  const skipped = subs.length - valid.length;
+  if (skipped) console.error(`subscriptions.json: skipped ${skipped} entries with an invalid channel id`);
   const insert = db.prepare("INSERT OR IGNORE INTO subscriptions (id, title) VALUES (?, ?)");
   db.exec("BEGIN IMMEDIATE");
   try {
-    for (const s of subs.slice(0, MAX_SUBS)) insert.run(s.id, s.title);
+    for (const s of valid.slice(0, MAX_SUBS)) insert.run(s.id, s.title);
     db.prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('subscriptions_json_imported', ?)").run(String(Date.now()));
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
-  console.log(`imported ${Math.min(subs.length, MAX_SUBS)} subscriptions from ${file}`);
+  console.log(`imported ${Math.min(valid.length, MAX_SUBS)} subscriptions from ${file}`);
   rename(`${file}.migrated`, "imported");
 }
 onOpen(importLegacyJson);
@@ -67,7 +74,9 @@ export async function listSubs(): Promise<Subscription[]> {
   return rows.map(({ id, title }) => ({ id, title })); // plain objects, not the driver's null-prototype rows
 }
 
-export async function addSub(sub: Subscription): Promise<"added" | "exists" | "full"> {
+export async function addSub(input: Subscription): Promise<"added" | "exists" | "full"> {
+  const sub = clean(input);
+  if (!sub) throw new RangeError("invalid channel id");
   const db = getDb();
   // Synchronous, so nothing can interleave with the count check; the transaction keeps it atomic across processes too.
   db.exec("BEGIN IMMEDIATE");

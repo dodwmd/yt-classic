@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, mkdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
@@ -35,25 +35,34 @@ export const MIGRATIONS: Migration[] = [
   },
 ];
 
-/** Applies every migration newer than the recorded version, each in its own transaction. Safe to call repeatedly. */
-export function migrate(db: DatabaseSync, migrations: Migration[] = MIGRATIONS): number {
+/**
+ * Applies every migration newer than the recorded version, each in its own transaction. Safe to call repeatedly
+ * and from several processes at once: the version is re-read inside the write lock, so a process that lost the
+ * race skips what the winner already applied. `beforeLock` is a test seam that runs right before taking the lock.
+ */
+export function migrate(db: DatabaseSync, migrations: Migration[] = MIGRATIONS, beforeLock?: (m: Migration) => void): number {
   db.exec("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)");
-  const row = db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number | null };
-  const current = row.v ?? 0;
+  const latest = () => ((db.prepare("SELECT MAX(version) AS v FROM schema_migrations").get() as { v: number | null }).v ?? 0);
+  let current = latest();
   const insert = db.prepare("INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)");
   for (const m of [...migrations].sort((a, b) => a.version - b.version)) {
     if (m.version <= current) continue;
+    beforeLock?.(m);
     db.exec("BEGIN IMMEDIATE");
     try {
-      db.exec(m.sql);
-      insert.run(m.version, Date.now());
+      current = latest(); // another process may have applied this while we waited for the lock
+      if (m.version > current) {
+        db.exec(m.sql);
+        insert.run(m.version, Date.now());
+        current = m.version;
+      }
       db.exec("COMMIT");
     } catch (e) {
       db.exec("ROLLBACK");
       throw new Error(`migration ${m.version} failed: ${(e as Error).message}`, { cause: e });
     }
   }
-  return Math.max(current, ...migrations.map((m) => m.version));
+  return current;
 }
 
 export function openDb(path: string): DatabaseSync {
@@ -83,28 +92,76 @@ export function stmt(db: DatabaseSync, sql: string): StatementSync {
 }
 
 let current: { path: string; db: DatabaseSync } | null = null;
-const opened = new Set<(db: DatabaseSync) => void>();
+let closed = false;
+const hooks = new Set<(db: DatabaseSync) => void>();
 
-/** Runs once for every freshly opened connection (after migrations); used for one-time data imports. */
-export function onOpen(fn: (db: DatabaseSync) => void): void {
-  opened.add(fn);
+/**
+ * Registers a function that runs once for every freshly opened connection (after migrations), e.g. a one-time
+ * import. If the connection is already open it runs right away, so import order does not matter. A hook that
+ * throws fails getDb() (or, for a late registration, discards the connection); the next call retries. Returns an unregister function.
+ */
+export function onOpen(fn: (db: DatabaseSync) => void): () => void {
+  hooks.add(fn);
+  if (current) {
+    try {
+      fn(current.db);
+    } catch (e) {
+      console.error(`database hook failed: ${(e as Error).message}`);
+      closeDb(); // the next getDb() reopens and retries every hook
+    }
+  }
+  return () => void hooks.delete(fn);
 }
 
-/** The connection for the current DATA_DIR, opened on first use. Throws if the database cannot be opened. */
+/** Where the database lives. Tests must always set DATA_DIR so they can never touch the real ./data. */
+function dataDir(): string {
+  const dir = process.env.DATA_DIR;
+  if (!dir && process.env.NODE_TEST_CONTEXT) throw new Error("DATA_DIR must be set when running tests");
+  return resolve(dir ?? "./data");
+}
+
+/** yt.db and its -wal/-shm may hold personal data: owner-only. The sidecar files inherit the main file's mode. */
+function restrict(path: string): void {
+  for (const f of [path, `${path}-wal`, `${path}-shm`]) {
+    try {
+      chmodSync(f, 0o600);
+    } catch {
+      // not there, or not ours to change (bind mounts): the directory permissions still apply
+    }
+  }
+}
+
+/** The connection for the current DATA_DIR, opened on first use. Throws if it cannot be opened (or after shutdown). */
 export function getDb(): DatabaseSync {
-  const dir = resolve(process.env.DATA_DIR ?? "./data");
+  if (closed) throw new Error("database is closed (shutting down)");
+  const dir = dataDir();
   const path = join(dir, "yt.db");
   if (current?.path === path) return current.db;
   closeDb(); // DATA_DIR changed (tests); production never gets here twice
-  mkdirSync(dir, { recursive: true });
-  const db = openDb(path);
+  let db: DatabaseSync | undefined;
+  try {
+    mkdirSync(dir, { recursive: true, mode: 0o700 }); // only affects directories we create
+    db = openDb(path);
+    restrict(path);
+    for (const fn of hooks) fn(db);
+  } catch (e) {
+    try {
+      db?.close();
+    } catch {
+      // already failing
+    }
+    throw new Error(`cannot open the database in ${dir}: ${(e as Error).message}`, { cause: e });
+  }
   current = { path, db };
-  for (const fn of opened) fn(db);
   return db;
 }
 
-/** Checkpoints the WAL and closes the connection. A later getDb() reopens it. */
-export function closeDb(): void {
+/**
+ * Checkpoints the WAL and closes the connection. Idempotent. A later getDb() reopens it, unless `final` is set
+ * (process shutdown): then getDb() throws, so an in-flight request cannot reopen the database behind our back.
+ */
+export function closeDb(final = false): void {
+  closed = final;
   const c = current;
   current = null;
   if (!c) return;

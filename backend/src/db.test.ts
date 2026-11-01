@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { MIGRATIONS, closeDb, getDb, migrate, openDb } from "./db.ts";
+import { writeFileSync } from "node:fs";
 
 let dir = "";
 beforeEach(() => {
@@ -58,4 +59,42 @@ test("the database uses WAL and survives reopening", () => {
   const again = openDb(join(dir, "yt.db"));
   assert.equal((again.prepare("SELECT value FROM meta WHERE key = 'k'").get() as { value: string }).value, "v");
   again.close();
+});
+
+test("a loser of the migration race skips what the winner applied", () => {
+  const path = join(dir, "race.db");
+  const a = new DatabaseSync(path);
+  const b = new DatabaseSync(path);
+  a.exec("PRAGMA journal_mode = WAL");
+  b.exec("PRAGMA busy_timeout = 5000");
+  // b has read "version 0" and is about to take the lock when a runs the whole migration.
+  assert.equal(migrate(b, MIGRATIONS, () => void migrate(a)), MIGRATIONS.at(-1)!.version);
+  assert.deepEqual(versions(b), MIGRATIONS.map((m) => m.version));
+  a.close();
+  b.close();
+});
+
+test("getDb refuses after a final close, but closeDb is idempotent and reopens otherwise", () => {
+  closeDb(); // idle: nothing open, must not throw
+  closeDb();
+  assert.ok(getDb());
+  closeDb();
+  assert.ok(getDb());
+  closeDb(true);
+  closeDb(true);
+  assert.throws(() => getDb(), /closed/);
+  closeDb(); // clears the flag (tests only)
+  assert.ok(getDb());
+});
+
+test("tests cannot fall back to the real ./data", () => {
+  delete process.env.DATA_DIR;
+  assert.throws(() => getDb(), /DATA_DIR must be set/);
+});
+
+test("a DATA_DIR that is a file is a clear error", () => {
+  const f = join(dir, "file");
+  writeFileSync(f, "x");
+  process.env.DATA_DIR = f;
+  assert.throws(() => getDb(), /cannot open the database/);
 });

@@ -10,11 +10,14 @@ execFile(process.env.YTDLP_BIN ?? "yt-dlp", ["--version"], (err, out) =>
   console.log(err ? `yt-dlp not runnable: ${err.message}` : `yt-dlp ${out.trim()}`),
 );
 
+let shuttingDown = false;
 for (const sig of ["SIGTERM", "SIGINT"] as const) {
   process.on(sig, () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`${sig} received, shutting down`);
     killChildren(); // don't leave ffmpeg/yt-dlp behind
-    const done = () => (closeDb(), process.exit(0)); // checkpoint the WAL before leaving
+    const done = () => (closeDb(true), process.exit(0)); // final: late requests cannot reopen it // checkpoint the WAL before leaving
     server.close(done);
     server.closeAllConnections();
     setTimeout(done, 2000).unref();

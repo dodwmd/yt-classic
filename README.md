@@ -101,11 +101,13 @@ while the backend runs. It holds:
 - your **subscriptions** (the data worth backing up);
 - a **metadata cache** (channel feeds, video and channel details, related videos) that is written through to disk and
   loaded lazily after a restart, so a restart does not re-fetch every subscription's RSS feed or spend API quota.
-  Entries keep their normal TTL, expired rows are pruned, and the table is capped at 5000 rows. Stream URLs and
+  Entries keep their normal TTL; expired rows are pruned at start and periodically, and the table is capped at 5000
+  rows and 128 MB (subscription feeds are evicted last). A `CACHE_VERSION` bump in `backend/src/cache.ts` purges rows
+  written by an older data shape. Stream URLs and
   search results are never persisted. The cache is disposable: if it cannot be read or written, the backend logs it
   and carries on from memory.
 
-Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start.
+The database files are created owner-only (0600; a data directory the backend creates is 0700). Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start.
 
 *Upgrading:* an existing `subscriptions.json` is imported automatically on first start and renamed to
 `subscriptions.json.migrated` (keep it as a backup, or delete it). A damaged file is moved aside as

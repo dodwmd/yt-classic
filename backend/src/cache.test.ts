@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cacheSize, cached, clearCache, pruneDisk } from "./cache.ts";
+import { CACHE_VERSION, cacheSize, cached, clearCache, pruneDisk } from "./cache.ts";
 import { closeDb, getDb } from "./db.ts";
 
 let dir = "";
@@ -102,14 +102,79 @@ test("failures are not persisted", async () => {
   assert.equal(rows(), 0);
 });
 
-test("pruning removes expired rows and caps the table", async () => {
-  for (let i = 0; i < 10; i++) await cached(`s${i}`, 1000, async () => i, true);
-  for (let i = 0; i < 10; i++) await cached(`l${i}`, 3_600_000, async () => i, true);
-  assert.equal(rows(), 20);
-  await withClock(5000, async () => assert.equal(pruneDisk(100), 10)); // the short-lived ones
-  assert.equal(rows(), 10);
-  assert.equal(pruneDisk(4), 6);
-  assert.equal(rows(), 4);
+const seed = (key: string, used: number, size = 10, exp = Date.now() + 3_600_000) =>
+  getDb().prepare("INSERT OR REPLACE INTO cache (key, val, exp, used) VALUES (?, ?, ?, ?)").run(key, JSON.stringify("x".repeat(size - 2)), exp, used);
+const keys = () => (getDb().prepare("SELECT key FROM cache ORDER BY key").all() as { key: string }[]).map((r) => r.key);
+
+test("pruning removes expired rows and keeps the most recently used ones", () => {
+  seed("old-expired", 100, 10, Date.now() - 1);
+  seed("v1", 10);
+  seed("v2", 40);
+  seed("v3", 20);
+  seed("v4", 30);
+  assert.equal(pruneDisk(2), 3); // the expired row and the two least recently used
+  assert.deepEqual(keys(), ["v2", "v4"]);
+});
+
+test("feed rows (rss:) outrank browsing rows, whatever their age", () => {
+  seed("rss:UC1", 1);
+  seed("rss:UC2", 2);
+  for (let i = 0; i < 5; i++) seed(`video:${i}`, 1000 + i);
+  pruneDisk(3);
+  assert.deepEqual(keys(), ["rss:UC1", "rss:UC2", "video:4"]);
+});
+
+test("pruning enforces the total byte budget, counting bytes not characters", () => {
+  seed("a", 4, 100);
+  seed("b", 3, 100);
+  seed("c", 2, 100);
+  assert.equal(pruneDisk(100, 250), 1);
+  assert.deepEqual(keys(), ["a", "b"]);
+});
+
+test("the byte budget counts bytes, not characters", () => {
+  seed("narrow", 4, 100);
+  getDb().prepare("INSERT INTO cache (key, val, exp, used) VALUES ('wide', ?, ?, 9)").run("\u00e9".repeat(100), Date.now() + 1e6); // 100 chars, 200 bytes
+  pruneDisk(100, 250);
+  assert.deepEqual(keys(), ["wide"]); // 300 bytes in total; 200 characters would have fit
+});
+
+test("a value over the byte limit (multi-byte characters) is not persisted", async () => {
+  await cached("big", 60_000, async () => "\u00e9".repeat(600_000), true); // 600k chars, 1.2 MB
+  assert.equal(rows(), 0);
+  await cached("fits", 60_000, async () => "\u00e9".repeat(400_000), true); // 800 kB
+  assert.equal(rows(), 1);
+});
+
+test("opening the database prunes what piled up", async () => {
+  await cached("seed", 60_000, async () => 1, true);
+  for (let i = 0; i < 20; i++) seed(`stale${i}`, 1, 10, Date.now() - 1);
+  assert.equal(rows(), 21);
+  closeDb();
+  getDb();
+  assert.equal(rows(), 1);
+});
+
+test("rows written under another CACHE_VERSION are never served", async () => {
+  await cached("shape", 60_000, async () => ({ old: true }), true);
+  getDb().prepare("UPDATE meta SET value = '0' WHERE key = 'cache_version'").run(); // as if written by an older deploy
+  closeDb();
+  clearCache();
+  assert.deepEqual(await cached("shape", 60_000, async () => ({ new: true }), true), { new: true });
+  assert.equal(getDb().prepare("SELECT value FROM meta WHERE key = 'cache_version'").get()!.value, String(CACHE_VERSION));
+});
+
+test("memory hits refresh the disk recency at most once a minute", async () => {
+  await cached("hot", 3_600_000, async () => 1, true);
+  const used = () => (getDb().prepare("SELECT used FROM cache WHERE key = 'hot'").get() as { used: number }).used;
+  getDb().prepare("UPDATE cache SET used = 1 WHERE key = 'hot'").run();
+  await cached("hot", 3_600_000, async () => 1, true); // within the minute of the write: untouched
+  assert.equal(used(), 1);
+  await withClock(61_000, async () => void (await cached("hot", 3_600_000, async () => 1, true)));
+  assert.ok(used() > 1);
+  getDb().prepare("UPDATE cache SET used = 1 WHERE key = 'hot'").run();
+  await withClock(62_000, async () => void (await cached("hot", 3_600_000, async () => 1, true)));
+  assert.equal(used(), 1, "throttled");
 });
 
 test("a broken database never breaks a request", async () => {
