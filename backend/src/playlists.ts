@@ -29,12 +29,27 @@ export const MAX_MEMBERSHIP = 100;
 /** Playlist ids in URLs: plain decimal. */
 export const PLAYLIST_ID = /^[1-9]\d{0,8}$/;
 
+export const MAX_LOOKUPS_PER_HOUR = 120; // metadata lookups for adds, globally: arbitrary ids cannot burn the Data API quota
+
+let lookups: number[] = [];
+/** Test seam. */
+export function resetLookupLimit(): void {
+  lookups = [];
+}
+export function lookupAllowed(now = Date.now(), max = MAX_LOOKUPS_PER_HOUR): boolean {
+  lookups = lookups.filter((t) => t > now - 3_600_000);
+  return lookups.length < max;
+}
+export function noteLookup(now = Date.now()): void {
+  lookups.push(now);
+}
+
 export type Failure = "invalid" | "exists" | "full" | "missing" | "builtin";
 
 /** Trimmed, NFC, 1..80 code points, no control characters; null when unusable. */
 export function cleanName(raw: string): string | null {
   const name = raw.normalize("NFC").trim();
-  if (!name || Array.from(name).length > MAX_NAME || /[\p{Cc}\u2028\u2029]/u.test(name)) return null;
+  if (!name || Array.from(name).length > MAX_NAME || /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u.test(name) || !/[\p{L}\p{N}\p{P}\p{S}]/u.test(name.replace(/[\u2800\u3164\uffa0]/g, ""))) return null;
   return name;
 }
 const keyOf = (name: string) => name.toLowerCase();

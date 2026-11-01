@@ -49,7 +49,7 @@ fun thumbUrl(id: String) = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 
 @Composable
 fun FeedRow(v: FeedItem, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
-    thumb = thumbUrl(v.id), title = v.title, duration = null, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.errors?.get(v.id),
+    thumb = thumbUrl(v.id), title = v.title, duration = null, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.let { { LaterNote(it, v.id) } },
     details = listOf(v.channelTitle, joinParts(formatViews(v.views), timeAgo(v.publishedAt))),
     onClick = { onVideo(v.id) },
 )
@@ -57,14 +57,14 @@ fun FeedRow(v: FeedItem, onVideo: (String) -> Unit, watched: Boolean = false, la
 @Composable
 fun RelatedRow(r: RelatedItem, onVideo: (String) -> Unit, thumbWidth: Int = 160, watched: Boolean = false, later: LaterState? = null) = VideoRow(
     thumb = r.thumb, title = r.title, duration = r.duration, thumbWidth = thumbWidth, watched = watched,
-    trailing = later?.let { { LaterButton(it, r.id, r.title) } }, note = later?.errors?.get(r.id),
+    trailing = later?.let { { LaterButton(it, r.id, r.title) } }, note = later?.let { { LaterNote(it, r.id) } },
     details = listOf(r.channelTitle, joinParts(r.views?.let(::viewsText), r.age ?: timeAgo(r.publishedAt))),
     onClick = { onVideo(r.id) },
 )
 
 @Composable
 fun SummaryRow(v: VideoSummary, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
-    thumb = v.thumb, title = v.title, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.errors?.get(v.id), duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds),
+    thumb = v.thumb, title = v.title, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.let { { LaterNote(it, v.id) } }, duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds),
     details = listOf(v.channelTitle, joinParts(timeAgo(v.publishedAt), formatViews(v.views))),
     onClick = { onVideo(v.id) },
 )
@@ -95,7 +95,7 @@ fun rememberWatched(api: YtApi, ids: List<String>): Set<String> {
 /** Row for a history entry: shows how far you got, as a bar and in words (for TalkBack). */
 @Composable
 fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit, later: LaterState? = null) = VideoRow(
-    trailing = later?.let { { LaterButton(it, h.id, h.title) } }, note = later?.errors?.get(h.id),
+    trailing = later?.let { { LaterButton(it, h.id, h.title) } }, note = later?.let { { LaterNote(it, h.id) } },
     thumb = h.thumb.ifEmpty { thumbUrl(h.id) }, title = h.title, duration = h.durationSeconds.takeIf { it > 0 }?.let(::formatSeconds),
     details = listOf(
         h.channelTitle,

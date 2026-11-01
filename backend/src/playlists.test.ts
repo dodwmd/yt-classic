@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { closeDb, getDb } from "./db.ts";
 import type { VideoMeta } from "./history.ts";
-import { MAX_ITEMS, MAX_NAME, MAX_PLAYLISTS, WATCH_LATER, addItem, canAdd, cleanName, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
+import { MAX_ITEMS, MAX_NAME, MAX_LOOKUPS_PER_HOUR, MAX_PLAYLISTS, WATCH_LATER, lookupAllowed, noteLookup, resetLookupLimit, addItem, canAdd, cleanName, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
 
 const vid = (n: number) => "v" + String(n).padStart(10, "0");
 const meta = (id: string): VideoMeta => ({ id, title: "T " + id, channelId: "UC" + "a".repeat(22), channelTitle: "Chan", thumb: "https://i.ytimg.com/x.jpg", durationSeconds: 600 });
@@ -33,6 +35,12 @@ test("names: trimmed, 1..80 code points, no control characters, unique ignoring 
   assert.equal(cleanName("   "), null);
   assert.equal(cleanName("a\nb"), null);
   assert.equal(cleanName("a\u0000b"), null);
+  assert.equal(cleanName("a\u202eb"), null, "bidi override");
+  assert.equal(cleanName("a\u200bb"), null, "zero-width space");
+  assert.equal(cleanName("\u00ad"), null, "soft hyphen only");
+  assert.equal(cleanName("\u2800\u2800"), null, "no visible character");
+  assert.equal(cleanName("a\u2028b"), null);
+  assert.equal(cleanName("..."), "...");
   assert.equal(cleanName("x".repeat(MAX_NAME + 1)), null);
   assert.equal(cleanName("x".repeat(MAX_NAME)), "x".repeat(MAX_NAME));
   assert.equal(cleanName("😀".repeat(MAX_NAME)), "😀".repeat(MAX_NAME));
@@ -198,4 +206,40 @@ test("writes run in a transaction: one cannot start inside another", () => {
   assert.throws(() => addItem(WATCH_LATER, meta(vid(2))), /transaction|BEGIN/i, "nested writes are refused rather than interleaved");
   raw.exec("ROLLBACK");
   assert.equal(addItem(WATCH_LATER, meta(vid(2))), "added");
+});
+
+test("lookup limiter: the window slides, and the cap is exact", () => {
+  resetLookupLimit();
+  for (let i = 0; i < MAX_LOOKUPS_PER_HOUR; i++) {
+    assert.equal(lookupAllowed(1000 + i), true);
+    noteLookup(1000 + i);
+  }
+  assert.equal(lookupAllowed(2000), false);
+  assert.equal(lookupAllowed(1000 + 3_600_000 + 1), true, "the oldest entries age out");
+  resetLookupLimit();
+});
+
+test("a failing write inside a transaction rolls everything back", () => {
+  addItem(WATCH_LATER, meta(vid(1)));
+  getDb().exec("CREATE TRIGGER boom BEFORE UPDATE ON playlist_items BEGIN SELECT RAISE(ABORT, 'boom'); END");
+  assert.throws(() => moveItem(WATCH_LATER, vid(1), 0), /boom/);
+  getDb().exec("DROP TRIGGER boom");
+  addItem(WATCH_LATER, meta(vid(2)));
+  getDb().exec("CREATE TRIGGER boom2 BEFORE UPDATE ON playlists BEGIN SELECT RAISE(ABORT, 'boom'); END");
+  assert.throws(() => addItem(WATCH_LATER, meta(vid(3))), /boom/);
+  getDb().exec("DROP TRIGGER boom2");
+  assert.deepEqual(ids(WATCH_LATER), [vid(1), vid(2)], "the insert of the failed add was rolled back");
+  assert.equal(addItem(WATCH_LATER, meta(vid(3))), "added", "and the connection is usable (no transaction left open)");
+});
+
+test("two processes adding to the same playlist at once: the cap holds and nothing is duplicated", async () => {
+  getDb(); // migrations applied before the children start
+  const run = (offset: number) =>
+    promisify(execFile)(process.execPath, ["--experimental-strip-types", "--no-warnings", join(import.meta.dirname, "playlists.child.ts"), String(offset), "350"], { env: { ...process.env, DATA_DIR: dir } });
+  const outs = await Promise.all([run(0), run(200)]); // ids 200..349 are tried by both
+  const tally = outs.map((o) => JSON.parse(o.stdout) as Record<string, number>);
+  assert.equal(getPlaylist(WATCH_LATER)?.count, MAX_ITEMS);
+  assert.equal((getDb().prepare("SELECT COUNT(DISTINCT video_id) AS n FROM playlist_items").get() as { n: number }).n, MAX_ITEMS);
+  assert.equal(tally[0].added + tally[1].added, MAX_ITEMS);
+  assert.ok(tally[0].full + tally[1].full > 0 && tally[0].present + tally[1].present > 0);
 });

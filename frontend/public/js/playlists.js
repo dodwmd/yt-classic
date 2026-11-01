@@ -9,7 +9,11 @@ let busy = false;
 
 // One request at a time; a failure is shown at the top of the page.
 async function attempt(request) {
-  if (busy) return;
+  if (busy) {
+    $("#err").textContent = "Still working on the previous request.";
+    $("#err").hidden = false;
+    return;
+  }
   busy = true;
   $("#err").hidden = true;
   try {
@@ -28,13 +32,19 @@ function row(p) {
   name.textContent = p.name;
   name.href = `/playlists?id=${p.id}`;
   $(".count", li).textContent = `${p.count} video${p.count === 1 ? "" : "s"}`;
-  for (const b of [$(".ren", li), $(".del", li)]) {
-    b.hidden = p.builtin;
-    b.setAttribute("aria-label", `${b.textContent} ${p.name}`);
-  }
+  const label = () => {
+    for (const b of [$(".ren", li), $(".del", li)]) {
+      b.hidden = p.builtin;
+      b.setAttribute("aria-label", `${b.textContent} ${name.textContent}`);
+    }
+  };
+  label();
   $(".ren", li).addEventListener("click", () => {
     const to = prompt("Rename playlist", name.textContent);
-    if (to && to.trim() !== name.textContent) attempt(async () => (name.textContent = (await send(`/api/playlists/${p.id}/rename`, "POST", { name: to })).playlist.name));
+    if (to && to.trim() !== name.textContent) attempt(async () => {
+      name.textContent = (await send(`/api/playlists/${p.id}/rename`, "POST", { name: to })).playlist.name;
+      label();
+    });
   });
   $(".del", li).addEventListener("click", () => confirm(`Delete the playlist "${name.textContent}" and its list of videos? The videos themselves are not affected.`) && attempt(async () => {
     await send(`/api/playlists/${p.id}`, "DELETE");
@@ -58,7 +68,7 @@ function showLists() {
 
 const first = () => $("#pl-grid .thumb")?.getAttribute("href");
 function sync() {
-  $("#none").hidden = !!$("#pl-grid").children.length;
+  $("#none").hidden = !!$("#pl-grid").children.length || !!next; // more pages may hold items
   $("#play").hidden = !first();
   $("#play").href = first() || "/playlists";
 }

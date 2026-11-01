@@ -83,7 +83,7 @@ class PlaylistsTest {
         assertEquals("GET /api/playlists/1?limit=48&before=1.2", requests.last())
 
         assertEquals(setOf("dQw4w9WgXc0"), api.inWatchLater(listOf("dQw4w9WgXc0", "dQw4w9WgXc9")))
-        assertEquals("GET /api/playlists/membership?ids=dQw4w9WgXc0%2CdQw4w9WgXc9", requests.last().replace(",", "%2C"))
+        assertEquals("GET /api/playlists/membership?ids=dQw4w9WgXc0%2CdQw4w9WgXc9", requests.last())
     }
 
     @Test

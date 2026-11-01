@@ -394,3 +394,27 @@ test("browser form login: 303 to the validated next page with the cookie; wrong 
   for (let i = 0; i < 10; i++) await form("nope" + i);
   assert.equal((await form(TOKEN)).headers.location, "/login#locked");
 });
+
+test("every playlist route is behind the gate: 401 without or with a wrong token, reachable with the right one", async () => {
+  const form = { "content-type": "application/x-www-form-urlencoded" };
+  const routes: [string, string, string][] = [
+    ["GET", "/api/playlists", ""],
+    ["POST", "/api/playlists", "name=x"],
+    ["GET", "/api/playlists/membership?ids=" + VID, ""],
+    ["GET", "/api/playlists/1", ""],
+    ["POST", "/api/playlists/2/rename", "name=y"],
+    ["DELETE", "/api/playlists/2", ""],
+    ["POST", "/api/playlists/1/items", `id=${VID}`],
+    ["DELETE", `/api/playlists/1/items/${VID}`, ""],
+    ["POST", "/api/playlists/1/move", `id=${VID}&index=0`],
+  ];
+  for (const [method, path, body] of routes) {
+    for (const hdr of [{}, bearerHdr("wrong-token-0123456789")]) {
+      const r = await call(path, { method, headers: { ...form, ...hdr }, body: body || undefined });
+      assert.equal(r.status, 401, `${method} ${path}`);
+    }
+    const ok = await call(path, { method, headers: { ...form, ...bearerHdr(TOKEN) }, body: body || undefined });
+    assert.notEqual(ok.status, 401, `${method} ${path} with the token`);
+  }
+  assert.equal((await call("/api/playlists", { headers: bearerHdr(TOKEN) })).status, 200);
+});

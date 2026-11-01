@@ -9,7 +9,7 @@ import { createApp } from "./app.ts";
 import { clearCache } from "./cache.ts";
 import { getDb } from "./db.ts";
 import { clearHistory } from "./history.ts";
-import { deletePlaylist, listPlaylists } from "./playlists.ts";
+import { deletePlaylist, listPlaylists, resetLookupLimit, noteLookup, MAX_LOOKUPS_PER_HOUR } from "./playlists.ts";
 import { killChildren } from "./yt/dlp.ts";
 
 const CHANNEL = "UC" + "a".repeat(22);
@@ -76,6 +76,7 @@ after(() => {
 beforeEach(() => {
   clearCache();
   clearHistory();
+  resetLookupLimit();
   for (const p of listPlaylists()) if (!p.builtin) deletePlaylist(p.id);
   getDb().exec("DELETE FROM playlist_items");
   videoCalls = 0;
@@ -86,11 +87,11 @@ beforeEach(() => {
 });
 
 function get(path: string, opts: { method?: string; headers?: Record<string, string>; body?: string | Buffer } = {}) {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+  return new Promise<{ status: number; body: string; headers: Record<string, unknown> }>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path, method: opts.method ?? "GET", headers: opts.headers }, (res) => {
       let body = "";
       res.on("data", (d) => (body += d));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
     });
     req.on("error", reject);
     req.end(opts.body);
@@ -534,4 +535,20 @@ test("playlists: opening the video refreshes the stored copy (lazily, no extra l
   getDb().exec("UPDATE playlist_items SET title = 'stale'");
   await get(`/api/video/${VID}`);
   assert.equal(body(await get("/api/playlists/1")).items[0].title, "Server title");
+});
+
+test("playlists: new-video lookups are capped globally per hour (429 + Retry-After); existing items and removals still work", async () => {
+  await post("/api/playlists/1/items", `id=${VID}`);
+  for (let i = 0; i < MAX_LOOKUPS_PER_HOUR; i++) noteLookup();
+  const r = await post("/api/playlists/1/items", "id=AAAAAAAAAA2");
+  assert.equal(r.status, 429);
+  assert.equal(r.headers["retry-after"], "600");
+  const calls = videoCalls;
+  const again = await get("/api/playlists/1", {});
+  assert.equal(body(again).items.length, 1, "a refused add changes nothing");
+  assert.equal(body(await post("/api/playlists/1/items", `id=${VID}`)).added, false, "an item already there needs no lookup");
+  assert.equal(videoCalls, calls);
+  assert.deepEqual(body(await get(`/api/playlists/1/items/${VID}`, { method: "DELETE" })), { removed: true });
+  resetLookupLimit();
+  assert.equal((await post("/api/playlists/1/items", "id=AAAAAAAAAA2")).status, 200);
 });

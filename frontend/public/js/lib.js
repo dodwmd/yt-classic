@@ -133,14 +133,19 @@ export function laterButton(id, on, title, [add, added] = ["+", "\u2713"]) {
   return [b, msg];
 }
 
+// Thumbs not decorated yet (a later page only decorates its new cards). Marks them, so call it once the data is in.
+export const undecorated = (thumbs) => thumbs.filter((a) => !a.dataset.d);
+
 export async function markWatched() {
   try {
-    const thumbs = [...document.querySelectorAll('.thumb[href^="/watch?v="]')].slice(0, 100);
+    const thumbs = undecorated([...document.querySelectorAll('.thumb[href^="/watch?v="]')]).slice(0, 100);
     const id = (a) => new URLSearchParams(a.search).get("v");
     if (!thumbs.length) return;
     const list = thumbs.map(id).join(",");
-    const [{ ids }, { watchLater }] = await Promise.all([api(`/api/history/watched?ids=${list}`).catch(() => ({ ids: [] })), api(`/api/playlists/membership?ids=${list}`).catch(() => ({ watchLater: [] }))]);
+    // Without a known membership no toggle is shown (it would claim "not in Watch later"); the next call retries.
+    const [{ ids }, { watchLater }] = await Promise.all([api(`/api/history/watched?ids=${list}`).catch(() => ({ ids: [] })), api(`/api/playlists/membership?ids=${list}`)]);
     for (const a of thumbs) {
+      a.dataset.d = 1;
       if (ids.includes(id(a))) {
         const b = document.createElement("span");
         b.className = "badge";

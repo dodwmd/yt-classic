@@ -12,7 +12,7 @@ import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
-import { MAX_MEMBERSHIP, PLAYLIST_ID, addItem, canAdd, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
+import { MAX_MEMBERSHIP, lookupAllowed, noteLookup, PLAYLIST_ID, addItem, canAdd, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
 import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
 import { SESSION_SECONDS, accessToken, clientIp, cookieHeader, createGate, makeSession, safeEqual, safeNext, sessionKey } from "./auth.ts";
 
@@ -358,6 +358,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
       if (can === "missing" || can === "full") return failure(can === "full" ? "full" : "missing");
       if (can === "present") return json(res, 200, { added: false, playlist: getPlaylist(id) });
       // Title, channel and duration come from the server's own lookup, never from the request. A failed lookup adds nothing.
+      if (!lookupAllowed()) return json(res, 429, { error: "too many new Watch later lookups; try again later" }, { "retry-after": "600" });
+      noteLookup();
       const v = await video(videoId);
       if (!v) return json(res, 404, { error: "video not found" });
       const r = addItem(id, { id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });

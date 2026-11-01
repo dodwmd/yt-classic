@@ -65,16 +65,16 @@ fun VideoRow(
     thumbWidth: Int = 160,
     progress: Float? = null,
     watched: Boolean = false,
-    /** A control at the end of the row (e.g. the Watch later toggle); [note] is shown under the details (an error). */
+    /** A control at the end of the row (e.g. the Watch later toggle); [note] is shown under the details (an error and what to do about it). */
     trailing: (@Composable () -> Unit)? = null,
-    note: String? = null,
+    note: (@Composable () -> Unit)? = null,
 ) {
     Row(modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 12.dp, vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
         Thumbnail(thumb, duration, Modifier.width(thumbWidth.dp), progress, watched)
         Column(Modifier.weight(1f)) {
             Text(title, color = LinkBlue, fontWeight = FontWeight.Medium, maxLines = 3, overflow = TextOverflow.Ellipsis)
             for (d in details.filter { it.isNotEmpty() }) Text(d, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            if (note != null) Text(note, color = MaterialTheme.colorScheme.error, fontSize = 12.sp, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            note?.invoke()
         }
         trailing?.invoke()
     }

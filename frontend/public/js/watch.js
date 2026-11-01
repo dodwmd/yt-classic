@@ -55,7 +55,8 @@ run(async () => {
     $("#rel-list").append(row);
   }
   markWatched();
-  const { watchLater } = await api(`/api/playlists/membership?ids=${v.id}`).catch(() => ({ watchLater: [] }));
+  const { watchLater } = await api(`/api/playlists/membership?ids=${v.id}`).catch(() => ({}));
+  if (!watchLater) return; // unknown: no button rather than a wrong one
   const [btn, msg] = laterButton(v.id, watchLater.includes(v.id), v.title, ["Watch later", "\u2713 In Watch later"]);
   btn.className = msg.className = "";
   btn.id = "later";
