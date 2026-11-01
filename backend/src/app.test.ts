@@ -165,3 +165,22 @@ test("leaving mid-stream kills ffmpeg", async () => {
   for (let i = 0; i < 40 && alive(pid); i++) await sleep(50);
   assert.equal(alive(pid), false, "ffmpeg is still running after the client left");
 });
+
+test("/healthz reflects database health: 200, then 503 while it cannot be opened, then 200 again", async () => {
+  const good = process.env.DATA_DIR!;
+  assert.equal((await get("/healthz")).status, 200);
+  const notADir = join(tmp, "plain-file");
+  writeFileSync(notADir, "x");
+  process.env.DATA_DIR = notADir;
+  const real = console.error;
+  console.error = () => {};
+  try {
+    const r = await get("/healthz");
+    assert.equal(r.status, 503);
+    assert.match(r.body, /database unavailable/);
+  } finally {
+    console.error = real;
+    process.env.DATA_DIR = good;
+  }
+  assert.equal((await get("/healthz")).status, 200);
+});

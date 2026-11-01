@@ -4,6 +4,7 @@ import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { channel, channelVideos, video } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
+import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, listSubs, removeSub } from "./store.ts";
 import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
@@ -74,7 +75,15 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   const path = url.pathname;
   const param = (name: string) => url.searchParams.get(name) ?? "";
 
-  if (path === "/healthz") return void res.writeHead(200, text).end("ok");
+  if (path === "/healthz") {
+    try {
+      pingDb();
+    } catch (e) {
+      console.error(`healthz: ${(e as Error).message}`);
+      return void res.writeHead(503, text).end("database unavailable");
+    }
+    return void res.writeHead(200, text).end("ok");
+  }
   if (!hostAllowed(req)) return json(res, 421, { error: "unknown host" });
 
   if (path === "/api/home") {

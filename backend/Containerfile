@@ -18,12 +18,14 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
+# Fail the build if the base image has no node:sqlite (Node < 22.13).
+RUN node -e "require('node:sqlite')"
 
-# /data holds subscriptions.json; yt-dlp wants a writable cache dir (the root filesystem may be read-only).
+# /data holds yt.db (SQLite, node:sqlite needs Node >= 22.13; plus its -wal/-shm files); yt-dlp wants a writable cache dir (the root filesystem may be read-only).
 RUN mkdir -p /data && chown node:node /data
 ENV PORT=3000 DATA_DIR=/data XDG_CACHE_HOME=/tmp/cache
 USER 1000:1000
 EXPOSE 3000
 # The health check lives in compose.yaml: podman builds OCI images, which ignore HEALTHCHECK.
 # Exec form: node is PID 1 and receives SIGTERM directly.
-CMD ["node", "--experimental-strip-types", "src/server.ts"]
+CMD ["node", "--disable-warning=ExperimentalWarning", "--experimental-strip-types", "src/server.ts"]

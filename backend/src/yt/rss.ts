@@ -65,7 +65,7 @@ export function channelFeed(id: string): Promise<FeedItem[]> {
       console.error(`${(e as Error).message}; falling back to the Data API`);
       return uploadsAsFeed(id);
     }
-  });
+  }, true);
 }
 
 /** Merged feed, newest first. A failing channel is skipped rather than breaking the page. */

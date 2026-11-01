@@ -44,6 +44,7 @@ pkgs.mkShell {
     # debugging
     curl
     jq
+    sqlite
     htmlq
     git
   ] ++ localPackages;

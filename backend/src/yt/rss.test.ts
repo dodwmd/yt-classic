@@ -1,7 +1,11 @@
 import { test } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { channelFeed, parseFeed } from "./rss.ts";
 import { clearCache } from "../cache.ts";
+import { closeDb } from "../db.ts";
 
 const xml = `<feed><yt:channelId>UCabc</yt:channelId><title>Chan</title>
 <entry><id>yt:video:AAAAAAAAAAA</id><yt:videoId>AAAAAAAAAAA</yt:videoId><yt:channelId>UCabc</yt:channelId>
@@ -21,6 +25,8 @@ test("parseFeed", () => {
 
 test("channelFeed falls back to the Data API when the RSS endpoint keeps failing", async () => {
   clearCache();
+  const dir = mkdtempSync(join(tmpdir(), "yt-rss-"));
+  process.env.DATA_DIR = dir; // the feed cache is persisted
   process.env.YT_API_KEY = "test-key";
   const realFetch = globalThis.fetch;
   const calls: string[] = [];
@@ -40,5 +46,7 @@ test("channelFeed falls back to the Data API when the RSS endpoint keeps failing
   } finally {
     globalThis.fetch = realFetch;
     clearCache();
+    closeDb();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
