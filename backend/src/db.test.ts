@@ -1,0 +1,61 @@
+import { test, beforeEach, afterEach } from "node:test";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { MIGRATIONS, closeDb, getDb, migrate, openDb } from "./db.ts";
+
+let dir = "";
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), "yt-db-"));
+  process.env.DATA_DIR = dir;
+});
+afterEach(() => {
+  closeDb();
+  rmSync(dir, { recursive: true, force: true });
+});
+
+const versions = (db: DatabaseSync) =>
+  (db.prepare("SELECT version FROM schema_migrations ORDER BY version").all() as { version: number }[]).map((r) => r.version);
+
+test("migrations apply and are idempotent", () => {
+  const db = new DatabaseSync(":memory:");
+  assert.equal(migrate(db), MIGRATIONS.at(-1)!.version);
+  const before = versions(db);
+  assert.deepEqual(before, MIGRATIONS.map((m) => m.version));
+  migrate(db);
+  assert.deepEqual(versions(db), before);
+  db.close();
+});
+
+test("later migrations are applied on top, in order, once", () => {
+  const db = new DatabaseSync(":memory:");
+  migrate(db);
+  const extra = [...MIGRATIONS, { version: 2, sql: "CREATE TABLE history (id TEXT PRIMARY KEY)" }];
+  assert.equal(migrate(db, extra), 2);
+  assert.equal(migrate(db, extra), 2);
+  assert.deepEqual(versions(db), [1, 2]);
+  db.close();
+});
+
+test("a failing migration rolls back and is not recorded", () => {
+  const db = new DatabaseSync(":memory:");
+  migrate(db);
+  const bad = [...MIGRATIONS, { version: 2, sql: "CREATE TABLE ok (a); CREATE TABLE ok (b);" }];
+  assert.throws(() => migrate(db, bad), /migration 2 failed/);
+  assert.deepEqual(versions(db), [1]);
+  assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'ok'").get(), undefined);
+  db.close();
+});
+
+test("the database uses WAL and survives reopening", () => {
+  const db = getDb();
+  assert.equal((db.prepare("PRAGMA journal_mode").get() as { journal_mode: string }).journal_mode, "wal");
+  assert.equal((db.prepare("PRAGMA busy_timeout").get() as { timeout: number }).timeout, 5000);
+  db.prepare("INSERT INTO meta (key, value) VALUES ('k', 'v')").run();
+  closeDb();
+  const again = openDb(join(dir, "yt.db"));
+  assert.equal((again.prepare("SELECT value FROM meta WHERE key = 'k'").get() as { value: string }).value, "v");
+  again.close();
+});

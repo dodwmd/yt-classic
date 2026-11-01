@@ -58,5 +58,5 @@ export function related(id: string): Promise<RelatedItem[]> {
     });
     if (!res.ok) throw new Error(`next ${id}: ${res.status}`);
     return parseNext(await res.json());
-  });
+  }, true);
 }

@@ -44,7 +44,8 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
   downloaded or cached, and playback starts in a couple of seconds. Because a live stream has no fixed length, the
   browser's own seek bar can't work on it. The small `player.js` shows the real duration (from the API) and restarts
   the stream at `?t=<seconds>` when you seek outside what has buffered.
-- **Subscriptions** are stored in `DATA_DIR/subscriptions.json` (default `backend/data/`).
+- **Storage:** subscriptions and a persistent metadata cache live in one SQLite database, `DATA_DIR/yt.db` (default
+  `backend/data/`), using Node's built-in `node:sqlite` (no extra dependency).
 
 ## Requirements
 
@@ -93,9 +94,26 @@ podman-compose logs -f backend   # watch the backend log
 podman-compose down              # stop and remove the containers
 ```
 
-Subscriptions are kept in `backend/data/subscriptions.json` (mounted into the container), so they survive rebuilds.
-It is the one file worth backing up. If it is ever damaged, the backend moves it aside as
-`subscriptions.json.corrupt-<time>` and starts with an empty list instead of failing.
+**Storage.** Everything persistent is in `backend/data/yt.db` (mounted into the container), so it survives
+rebuilds and restarts. It is a SQLite database in WAL mode, so next to it you will see `yt.db-wal` and `yt.db-shm`
+while the backend runs. It holds:
+
+- your **subscriptions** (the data worth backing up);
+- a **metadata cache** (channel feeds, video and channel details, related videos) that is written through to disk and
+  loaded lazily after a restart, so a restart does not re-fetch every subscription's RSS feed or spend API quota.
+  Entries keep their normal TTL, expired rows are pruned, and the table is capped at 5000 rows. Stream URLs and
+  search results are never persisted. The cache is disposable: if it cannot be read or written, the backend logs it
+  and carries on from memory.
+
+Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start.
+
+*Upgrading:* an existing `subscriptions.json` is imported automatically on first start and renamed to
+`subscriptions.json.migrated` (keep it as a backup, or delete it). A damaged file is moved aside as
+`subscriptions.json.corrupt-<time>` and the site starts with an empty list instead of failing.
+
+*Backup:* stop the backend (`podman-compose stop backend`; a clean stop checkpoints the WAL into `yt.db`) and copy
+`yt.db`. For a backup while it runs, copy `yt.db`, `yt.db-wal` and `yt.db-shm` together, or run
+`sqlite3 backend/data/yt.db ".backup backup.db"`. Restoring is copying the file back.
 
 **Hardening.** The backend runs as a non-root user with a read-only root filesystem, no Linux capabilities, and
 memory/process limits. nginx is the non-root `nginx-unprivileged` image and sets a Content-Security-Policy and
@@ -208,7 +226,7 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `YT_API_KEY` | none (required) | YouTube Data API v3 key |
 | `AUDIO_LANG` | `en` | Preferred audio language when a video has several dubbed tracks |
 | `PORT` | `3000` | Backend listen port |
-| `DATA_DIR` | `./data` (`/data` in the container) | Where `subscriptions.json` is stored |
+| `DATA_DIR` | `./data` (`/data` in the container) | Where the SQLite database `yt.db` is stored (must be writable) |
 | `ALLOWED_HOSTS` | unset (any) | Comma-separated `Host` header values to accept, e.g. `192.168.1.10:8080`; others get 421 |
 | `MAX_STREAMS` | `3` | Concurrent video streams; extra requests get 503 |
 | `STREAM_MAX_SECONDS` | `21600` | Hard cap on one stream's duration |
@@ -268,7 +286,8 @@ backend/
   src/yt/search.ts       yt-dlp search (Data API fallback)
   src/yt/innertube.ts    related videos from YouTube's /next
   src/yt/rss.ts          channel RSS feeds
-  src/store.ts           subscriptions.json
+  src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
+  src/store.ts           subscriptions (SQLite, imports the old subscriptions.json)
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look; follows the system light/dark setting

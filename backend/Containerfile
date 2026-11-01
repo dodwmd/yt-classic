@@ -19,7 +19,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY src ./src
 
-# /data holds subscriptions.json; yt-dlp wants a writable cache dir (the root filesystem may be read-only).
+# /data holds yt.db (SQLite, node:sqlite needs Node >= 22.13; plus its -wal/-shm files); yt-dlp wants a writable cache dir (the root filesystem may be read-only).
 RUN mkdir -p /data && chown node:node /data
 ENV PORT=3000 DATA_DIR=/data XDG_CACHE_HOME=/tmp/cache
 USER 1000:1000

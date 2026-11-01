@@ -90,7 +90,7 @@ export function video(id: string): Promise<VideoDetail | null> {
       views: v.statistics?.viewCount,
       likes: v.statistics?.likeCount,
     };
-  });
+  }, true);
 }
 
 /** Related is not available in the API any more; use the channel's recent uploads (1 unit). */
@@ -137,7 +137,7 @@ export function channel(id: string): Promise<Channel | null> {
       subscribers: c.statistics?.hiddenSubscriberCount ? undefined : c.statistics?.subscriberCount,
       videoCount: c.statistics?.videoCount,
     };
-  });
+  }, true);
 }
 
 export async function channelVideos(channelId: string, pageToken = ""): Promise<SearchPage> {
@@ -155,5 +155,5 @@ export async function channelVideos(channelId: string, pageToken = ""): Promise<
       thumb: i.snippet.thumbnails?.medium?.url ?? `https://i.ytimg.com/vi/${i.snippet.resourceId.videoId}/mqdefault.jpg`,
     }));
     return { items, nextPageToken: data.nextPageToken, prevPageToken: data.prevPageToken };
-  });
+  }, true);
 }
