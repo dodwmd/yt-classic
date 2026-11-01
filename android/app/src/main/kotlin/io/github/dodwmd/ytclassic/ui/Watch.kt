@@ -42,7 +42,7 @@ fun WatchScreen(
         var expanded by remember(v.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
-            StreamPlayer(api, v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
+            StreamPlayer(v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
             if (!fullscreen) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {

@@ -33,11 +33,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -53,29 +50,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
-import androidx.media3.common.AudioAttributes
-import androidx.media3.common.C
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
+import io.github.dodwmd.ytclassic.App
 import io.github.dodwmd.ytclassic.data.VideoDetail
-import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.formatSeconds
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /**
- * Plays the backend's live stream. The stream can't be seeked, so seeking (slider, quality change, retry)
- * restarts it at the wanted offset through [StreamSeek]; the slider uses the real duration from the API.
+ * The player UI for [video]. Playback itself lives in [PlaybackHost], so it can continue in the background; this
+ * shows its state and sends the seek bar, quality and retry actions to it (which restart the stream at an offset
+ * through [StreamSeek]; the slider uses the real duration from the API).
  */
 @OptIn(UnstableApi::class)
 @Composable
 fun StreamPlayer(
-    api: YtApi,
     video: VideoDetail,
     initialQuality: Int,
     qualities: List<Int>,
@@ -86,90 +75,35 @@ fun StreamPlayer(
     onFullscreen: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
+    val host = (LocalContext.current.applicationContext as App).host
     val total = video.durationSeconds ?: 0L
-    val seek = remember(video.id) { StreamSeek(total, startSeconds) }
-    var quality by remember(video.id) { mutableIntStateOf(initialQuality) }
-    var positionSec by remember(video.id) { mutableLongStateOf(seek.base) }
-    var isPlaying by remember(video.id) { mutableStateOf(false) }
-    var buffering by remember(video.id) { mutableStateOf(true) }
-    var error by remember(video.id) { mutableStateOf<String?>(null) }
-    var finished by remember(video.id) { mutableStateOf(false) }
+    var positionSec by remember(video.id) { mutableLongStateOf(startSeconds) }
     var dragging by remember(video.id) { mutableStateOf<Float?>(null) }
+    val isPlaying = host.isPlaying
+    val finished = host.finished
+    val quality = host.quality
 
     var controlsVisible by remember(video.id) { mutableStateOf(true) }
     FullscreenEffect(fullscreen)
     BackHandler(enabled = fullscreen) { onFullscreen(false) }
 
-    val player = remember(video.id) {
-        ExoPlayer.Builder(context)
-            // Take audio focus (pause for calls, duck for prompts, stop other media) and pause when headphones are unplugged.
-            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
-            .setHandleAudioBecomingNoisy(true)
-            .build()
-    }
-    val scope = rememberCoroutineScope()
-    var loading by remember(video.id) { mutableStateOf<Job?>(null) }
+    fun savePosition() { if (host.video?.id == video.id) onPosition(if (host.finished) 0 else host.positionSeconds()) }
 
-    fun load(at: Long, q: Int = quality) {
-        error = null
-        finished = false
-        buffering = true
-        val start = seek.restartAt(at)
-        positionSec = start
-        // Only the newest request may reach the player: a quick second seek must not be overtaken by the first.
-        loading?.cancel()
-        loading = scope.launch {
-            val url = api.streamUrl(video.id, q, start, lang)
-            player.setMediaItem(MediaItem.fromUri(url))
-            player.prepare()
-            player.playWhenReady = true
-        }
-    }
-
-    fun savePosition() = onPosition(if (finished) 0 else seek.position(player.currentPosition))
-
-    DisposableEffect(player) {
-        val listener = object : Player.Listener {
-            override fun onIsPlayingChanged(isPlaying_: Boolean) {
-                isPlaying = isPlaying_
-            }
-
-            override fun onPlaybackStateChanged(state: Int) {
-                buffering = state == Player.STATE_BUFFERING
-                if (state == Player.STATE_ENDED) {
-                    // A finished stream and one the backend cut short both end here; only the position tells them apart.
-                    if (seek.endedEarly(player.currentPosition)) {
-                        positionSec = seek.position(player.currentPosition)
-                        error = "The stream stopped early."
-                    } else {
-                        finished = true
-                        positionSec = total
-                    }
-                }
-            }
-
-            override fun onPlayerError(e: PlaybackException) {
-                buffering = false
-                error = "Couldn't play this video (${e.errorCodeName})."
-            }
-        }
-        player.addListener(listener)
-        load(startSeconds)
+    DisposableEffect(video.id) {
+        host.open(video, initialQuality, lang, startSeconds)
         onDispose {
             savePosition()
-            player.removeListener(listener)
-            player.release()
+            host.leave(video.id) // stops, unless it is playing on in the background
         }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { // no background playback in v1
-        player.pause()
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) {
+        host.onAppStopped() // pauses unless background audio is on and playing
         savePosition() // the process may be killed while we're in the background
     }
 
-    LaunchedEffect(player) {
+    LaunchedEffect(video.id) {
         while (true) {
-            if (dragging == null && !finished) positionSec = seek.position(player.currentPosition)
+            if (dragging == null && host.video?.id == video.id) positionSec = host.positionSeconds()
             delay(500)
         }
     }
@@ -178,7 +112,7 @@ fun StreamPlayer(
     val transport: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(
-                onClick = { if (finished) load(0) else if (isPlaying) player.pause() else player.play() },
+                onClick = { if (isPlaying) host.pause() else host.play() },
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
             ) { PlayerIconView(if (finished) PlayerIcon.Replay else if (isPlaying) PlayerIcon.Pause else PlayerIcon.Play, textColor, iconSize = if (finished) 36.dp else 28.dp) }
             if (total > 0) {
@@ -186,7 +120,7 @@ fun StreamPlayer(
                     value = dragging ?: positionSec.toFloat(),
                     onValueChange = { dragging = it },
                     onValueChangeFinished = {
-                        dragging?.let { load(it.toLong()) }
+                        dragging?.let { host.load(it.toLong()) }
                         dragging = null
                     },
                     valueRange = 0f..total.toFloat(),
@@ -206,20 +140,19 @@ fun StreamPlayer(
     }
     // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
     // surface may still redraw for a frame when it is re-attached).
-    // The movable content below is remembered once per player, so Retry must reach the newest `load`.
-    val retry by rememberUpdatedState { load(positionSec) }
-    val videoView = remember(player) { movableContentOf { m: Modifier ->
+    val videoView = remember(host) { movableContentOf { m: Modifier ->
         Box(m) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
-                update = { it.player = player },
+                update = { it.player = host.player },
+                onRelease = { it.player = null },
                 modifier = Modifier.matchParentSize(),
             )
-            if (buffering && error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
-            error?.let { message ->
+            if (host.buffering && host.error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
+            host.error?.let { message ->
                 Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(message, color = Color.White)
-                    Button(onClick = { retry() }) { Text("Retry") }
+                    Button(onClick = { host.retry() }) { Text("Retry") }
                 }
             }
         }
@@ -251,7 +184,7 @@ fun StreamPlayer(
             transport()
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 for (q in qualities) {
-                    FilterChip(selected = q == quality, onClick = { if (q != quality) { quality = q; load(positionSec, q) } }, label = { Text("${q}p") })
+                    FilterChip(selected = q == quality, onClick = { if (q != quality) host.load(host.positionSeconds(), q) }, label = { Text("${q}p") })
                 }
             }
         }

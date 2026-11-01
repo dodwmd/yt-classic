@@ -11,6 +11,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.Alignment
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -92,6 +97,19 @@ fun SettingsScreen(app: App, onDone: () -> Unit) {
                 // Wait for the write, so the screen we go back to reads the new address.
                 scope.launch { app.settings.setServerUrl(address); onDone() }
             }) { Text("Save") }
+        }
+        val background by app.settings.backgroundAudio.collectAsState(initial = true)
+        Text("Playback", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
+        Row(
+            Modifier.fillMaxWidth().toggleable(value = background, role = Role.Switch) { scope.launch { app.settings.setBackgroundAudio(it) } },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Keep playing in the background")
+                Text("Audio continues with the screen off or another app open, with a notification to control it.", color = Muted)
+            }
+            Switch(checked = background, onCheckedChange = null)
         }
     }
 }

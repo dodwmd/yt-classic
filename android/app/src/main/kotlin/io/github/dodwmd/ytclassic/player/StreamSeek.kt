@@ -15,6 +15,18 @@ class StreamSeek(val totalSeconds: Long, startSeconds: Long = 0) {
     fun position(playerPositionMs: Long): Long =
         (base + playerPositionMs / 1000).coerceAtMost(maxOf(0, totalSeconds))
 
+    /**
+     * Absolute position in milliseconds. While a restart is pending ([restarting]) the player still reports the old
+     * stream's position, so the new start offset is shown instead.
+     */
+    fun positionMs(playerPositionMs: Long, restarting: Boolean = false): Long {
+        val ms = base * 1000 + if (restarting) 0 else playerPositionMs
+        return if (totalSeconds > 0) ms.coerceAtMost(totalSeconds * 1000) else ms
+    }
+
+    /** The real duration in milliseconds, or [unknown] when the API gave none. */
+    fun durationMs(unknown: Long): Long = if (totalSeconds > 0) totalSeconds * 1000 else unknown
+
     /** True when the stream ended well before the real end, so it was cut short (e.g. the remux died) rather than finished. */
     fun endedEarly(playerPositionMs: Long, toleranceSeconds: Long = 5): Boolean =
         totalSeconds > 0 && position(playerPositionMs) < totalSeconds - toleranceSeconds
