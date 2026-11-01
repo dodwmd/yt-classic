@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<script type="module" src="/static/js/lib.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+</div>
+<div id="page">
+  <form id="login" method="post" action="/api/login" autocomplete="off">
+    <h2>Access token required</h2>
+    <p class="hint">This server asks for its access token before it shows anything.</p>
+    <label for="token">Access token</label>
+    <input type="password" name="token" id="token" autocomplete="current-password" required>
+    <button type="submit">Log in</button>
+    <p id="bad" class="msg" role="alert">That token was not accepted.</p>
+    <p id="locked" class="msg" role="alert">Too many failed attempts. Wait a few minutes and try again.</p>
+  </form>
+</div>
+</body>
+</html>

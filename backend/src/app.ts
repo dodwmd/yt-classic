@@ -12,11 +12,12 @@ import { relatedFor } from "./yt/related.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
 import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
+import { SESSION_SECONDS, accessToken, clientIp, cookieHeader, createGate, makeSession, safeEqual, safeNext, sessionKey } from "./auth.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
 const publicDir = fileURLToPath(new URL("../../frontend/public/", import.meta.url));
-const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html", "/subscriptions": "subscriptions.html" };
+const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html", "/subscriptions": "subscriptions.html", "/login": "login.html" };
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css",
@@ -50,6 +51,10 @@ function hostAllowed(req: IncomingMessage): boolean {
   return !allowed.length || allowed.includes(req.headers.host ?? "");
 }
 
+const tooMany = (res: ServerResponse, secs: number) => json(res, 429, { error: "too many attempts" }, { "retry-after": String(secs) });
+const secureRequest = (req: IncomingMessage) => req.headers["x-forwarded-proto"] === "https";
+const unauthorized = (res: ServerResponse) => json(res, 401, { error: "unauthorized" }, { "www-authenticate": "Bearer" });
+
 async function readText(req: IncomingMessage, max = 4096): Promise<string | null> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -64,6 +69,21 @@ async function readText(req: IncomingMessage, max = 4096): Promise<string | null
 async function readForm(req: IncomingMessage): Promise<URLSearchParams | null> {
   const raw = await readText(req);
   return raw === null ? null : new URLSearchParams(raw);
+}
+
+/** The submitted token from a JSON `{token}` or form body; null when the body is too large. */
+async function readLogin(req: IncomingMessage): Promise<string | null> {
+  const body = await readText(req);
+  if (body === null) return null;
+  if ((req.headers["content-type"] ?? "").includes("json")) {
+    try {
+      const t = (JSON.parse(body) as { token?: unknown } | null)?.token;
+      return typeof t === "string" ? t : "";
+    } catch {
+      return "";
+    }
+  }
+  return new URLSearchParams(body).get("token") ?? "";
 }
 
 /** Progress comes as a form (the web page) or JSON (Android); either way only id, position and finished are read. */
@@ -115,7 +135,7 @@ async function serveFrontend(path: string, res: ServerResponse): Promise<boolean
   return true;
 }
 
-async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnType<typeof createGate>): Promise<void> {
   const url = new URL(req.url ?? "/", "http://localhost");
   const path = url.pathname;
   const param = (name: string) => url.searchParams.get(name) ?? "";
@@ -130,6 +150,47 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     return void res.writeHead(200, text).end("ok");
   }
   if (!hostAllowed(req)) return json(res, 421, { error: "unknown host" });
+
+  // --- Optional shared access token. Checked before any route runs (and so before yt-dlp/ffmpeg are spawned). ---
+  const secret = accessToken();
+  const ip = clientIp(req);
+  if (path === "/api/session") {
+    const v = secret ? gate.authenticate(req, secret, ip) : "ok";
+    if (typeof v === "number") return tooMany(res, v);
+    return json(res, 200, { auth: secret ? "required" : "none", authenticated: v === "ok" });
+  }
+  if (path === "/api/login" && req.method === "POST") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    if (!secret) return json(res, 200, { auth: "none", authenticated: true });
+    // The login page's plain HTML form lands back on a page; scripts and curl get JSON and status codes.
+    const html = (req.headers.accept ?? "").includes("text/html") && !(req.headers["content-type"] ?? "").includes("json");
+    const next = safeNext(url.searchParams.get("next"));
+    const back = (frag: string, headers: Record<string, string> = {}) =>
+      void res.writeHead(303, { location: `/login${next === "/" ? "" : `?next=${encodeURIComponent(next)}`}#${frag}`, "cache-control": "no-store", ...headers }).end();
+    const wait = gate.lockedFor(ip);
+    if (wait) return html ? back("locked") : tooMany(res, wait);
+    const given = await readLogin(req);
+    if (given === null) return json(res, 413, { error: "body too large" });
+    if (!safeEqual(given, secret)) {
+      gate.noteFailure(ip);
+      return html ? back("bad") : json(res, 401, { error: "invalid token" });
+    }
+    const cookie = { "set-cookie": cookieHeader(makeSession(sessionKey(secret)), SESSION_SECONDS, secureRequest(req)) };
+    if (html) return void res.writeHead(303, { location: next, "cache-control": "no-store", ...cookie }).end();
+    return json(res, 200, { auth: "required", authenticated: true }, cookie);
+  }
+  if (path === "/api/logout" && req.method === "POST") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const clear = { "set-cookie": cookieHeader("", 0, secureRequest(req)) };
+    // The footer's plain HTML form lands on the login page; scripts get JSON.
+    if ((req.headers.accept ?? "").includes("text/html")) return void res.writeHead(303, { location: "/login", "cache-control": "no-store", ...clear }).end();
+    return json(res, 200, { authenticated: false }, clear);
+  }
+  if (secret && (path.startsWith("/api/") || path.startsWith("/stream/"))) {
+    const v = gate.authenticate(req, secret, ip);
+    if (typeof v === "number") return tooMany(res, v);
+    if (v !== "ok") return unauthorized(res);
+  }
 
   if (path === "/api/home") {
     const subs = await listSubs();
@@ -284,13 +345,14 @@ function fail(err: unknown, res: ServerResponse): void {
 }
 
 export function createApp(): Server {
+  const gate = createGate();
   const server = createServer((req, res) => {
     const t0 = Date.now();
     const path = (req.url ?? "").split("?")[0];
     if (path !== "/healthz" && !path.startsWith("/static/")) {
       res.once("close", () => console.log(`${req.method} ${path} ${res.statusCode} ${Date.now() - t0}ms`));
     }
-    handle(req, res).catch((err) => fail(err, res));
+    handle(req, res, gate).catch((err) => fail(err, res));
   });
   server.headersTimeout = 15_000;
   server.requestTimeout = 30_000;

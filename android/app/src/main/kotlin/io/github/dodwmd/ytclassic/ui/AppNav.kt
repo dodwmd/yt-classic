@@ -22,6 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
@@ -88,6 +89,7 @@ fun AppNav(app: App, openVideoId: String? = null) {
         },
     ) { padding ->
         val startDestination = start ?: return@Scaffold
+        CompositionLocalProvider(LocalOpenSettings provides { settle(); nav.navigate("settings") }) {
         NavHost(nav, startDestination = startDestination, modifier = Modifier.padding(padding)) {
             composable("home") { HomeScreen(app.api, openVideo, openChannel) { nav.navigate("history") } }
             composable("history") { HistoryScreen(app.api, openVideo) }
@@ -104,6 +106,7 @@ fun AppNav(app: App, openVideoId: String? = null) {
                 ChannelScreen(app.api, entry.arguments?.getString("id").orEmpty(), openVideo)
             }
             composable("settings") { SettingsScreen(app, onDone = toHome) }
+        }
         }
     }
 }

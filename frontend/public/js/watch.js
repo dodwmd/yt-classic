@@ -57,8 +57,7 @@ run(async () => {
   markWatched();
 });
 
-/** Tell the server where we are every 10 s while playing, and on pause, end and leaving (or hiding the tab). Only
- * once something has really played, so opening a link and leaving records nothing. Failures are ignored. */
+// Reports progress every 10 s while playing and on pause/end/leave, once something has really played.
 function reportProgress(video, now, id) {
   let last = -1, played = false;
   const send = (finished) => {

@@ -1,12 +1,8 @@
-// Display formatting. Pure functions (no DOM) so they can be unit-tested.
-
 export function formatSeconds(total) {
   const h = Math.floor(total / 3600), m = Math.floor((total % 3600) / 60), s = Math.floor(total % 60);
   const ss = String(s).padStart(2, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
-
-/** "2 days ago"; empty for missing or invalid dates. */
 export function timeAgo(iso, now = Date.now()) {
   const t = Date.parse(iso);
   if (!Number.isFinite(t)) return "";
@@ -19,13 +15,9 @@ export function timeAgo(iso, now = Date.now()) {
   }
   return "just now";
 }
-
-/** "1,234 views"; empty when unknown. */
 export function formatViews(n) {
   return n === undefined || n === null || n === "" ? "" : `${Number(n).toLocaleString("en-US")} views`;
 }
-
-/** Display strings from the watch-next feed ("1.2M", "3K watching"): add "views" only when it isn't there. */
 export function viewsText(v) {
   return /view|watching/i.test(v) ? v : `${v} views`;
 }

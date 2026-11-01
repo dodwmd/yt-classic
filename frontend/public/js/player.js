@@ -1,5 +1,3 @@
-// Seek bar for live-remuxed streams. A plain <video> can't seek these (unknown length/byte layout),
-// so we show the real duration (from the API) and restart the stream at ?t= when seeking outside the buffer.
 export function initPlayer(root) {
   const v = root.querySelector("video");
   const total = Number(root.dataset.duration);

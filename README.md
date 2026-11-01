@@ -44,7 +44,7 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
   `DELETE /api/history/:id`, `POST /api/history/clear`, `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
-- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, the CSS,
+- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `login.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
 - **Playback:** YouTube no longer offers a single file with audio and video together, so the backend takes the
@@ -188,7 +188,44 @@ release's `SHA2-256SUMS`), keep `shell.nix` in step, and rebuild. The backend lo
 
 **Network exposure.** `compose.yaml` publishes port 8080 on all interfaces. To limit it, change the mapping to
 `"127.0.0.1:8080:8080"` or your LAN address. Set `ALLOWED_HOSTS` (below) to guard against DNS-rebinding. The app has
-no login, so keep it on a network you trust.
+no per-user login: either keep it on a network you trust or set the shared `ACCESS_TOKEN` (next section).
+
+**Access token (optional).** Set `ACCESS_TOKEN` in `backend/.env` (16 to 512 printable ASCII characters, no spaces or
+commas, for example `openssl rand -hex 24`; the backend refuses to start with a bad one) and every `/api/*` and
+`/stream/*` request must carry it, as `Authorization: Bearer <token>` (Android, scripts) or as the `yt_session` cookie
+(web). Unset, nothing changes and the backend logs that it is open; an *empty* `ACCESS_TOKEN=` logs a loud warning, and
+`REQUIRE_AUTH=1` makes the backend refuse to start unless a valid token is set (use it if you intend to have auth, so a
+typo can't silently leave the app open). Static pages and `/healthz` stay public (they hold no data),
+`GET /api/session` is open and returns `{"auth":"required"|"none","authenticated":bool}`, and the stream is authorised
+before yt-dlp or ffmpeg is started. The web UI redirects to `/login` on a 401. The login page is a plain HTML form (no script needed to submit): the
+backend answers a browser form post with a 303 to `?next=` after validating it as a same-site path (control characters,
+backslashes, `//` and encoded forms are refused), or back to `/login#bad`; the footer's *Log out* is a form too.
+`POST /api/login` (JSON `{token}` or form; scripts get JSON and status codes) compares in constant time (SHA-256 digests + `timingSafeEqual`), sets an
+HttpOnly, `SameSite=Strict` cookie (30 days) and `POST /api/logout` clears it. Login and logout keep the same-origin
+check; there is no CORS. The cookie is `Secure` when the request arrived over https: the bundled nginx passes an incoming
+`X-Forwarded-Proto: https` from your TLS proxy through (a client can only spoof that to add `Secure` to its own cookie).
+Android: Settings has an optional *Access token* field (sent only to the configured server; the connection test says
+whether a token is needed or rejected).
+
+*Lockout.* Failed attempts (wrong login token or wrong bearer, including on `/api/session`) are limited to 10 per client
+per **5 minutes**, then 429 with `Retry-After`. While a client is locked out, even the right token is refused (otherwise
+429 versus 200 would let it keep guessing); requests with a valid session cookie are unaffected. Behind the bundled nginx
+the client is the `X-Forwarded-For` it sets, so users behind one NAT share a lock, and a looser global cap (200 failures
+per 5 minutes) bounds guessing if that header is spoofed (it can only be when the backend is reachable directly: don't
+publish its port). The limiter is in memory (a restart resets it) and holds at most 2000 clients. The trade-off is that
+anyone who can send wrong tokens can briefly stop *new* logins from their address or, with the global cap, from everyone;
+the short window keeps that to minutes.
+
+*Why a signed cookie, not a session table:* the cookie is `<expiry>.<HMAC-SHA256(key, "session:<expiry>")>` and never
+contains the token. `key` is derived from the token and a random secret generated once and kept in the database `meta`
+table, so a sniffed cookie can't be brute-forced offline against a weak token, sessions survive restarts, and rotating
+`ACCESS_TOKEN` signs everyone out. It needs no session table. The price is that one session can't be revoked early:
+rotate the token. The token is stored in the Android app's private DataStore (not encrypted at rest, no extra
+dependency, excluded from backups) and in the server's environment.
+
+*What it does not do:* there is no TLS, so on plain http the token and cookie travel in the clear and anyone on the
+path can read them. It keeps casual users and other devices on the LAN out; it does not make the app safe to expose to
+the internet. Use a VPN or a trusted LAN (or put your own TLS proxy in front).
 
 **Starting at boot (rootless podman).** `restart: unless-stopped` does not bring containers back after a reboot by
 itself. Enable `systemctl --user enable --now podman-restart.service` (and `loginctl enable-linger $USER`), or
@@ -266,7 +303,8 @@ CI also builds the debug APK on pull requests that touch `android/` and attaches
 
 **First launch:** open Settings (the gear) and enter the backend's address, for example `192.168.1.153:8080` on home
 Wi-Fi, or its VPN host name when you're away, then **Test connection** and **Save**. The app uses plain `http://`
-(cleartext is allowed for this reason) and the backend has no login, so only use networks you trust.
+(cleartext is allowed for this reason), so only use networks you trust, even with an access token (it is sent unencrypted
+over http). Enter the token under *Access token* if the backend sets `ACCESS_TOKEN`.
 
 **How it works:** the backend's video stream is a live remux that can't be seeked, so the app knows the real duration
 from the API and *restarts* the stream at `?t=<seconds>` when you drag the seek bar or change quality (the web
@@ -322,6 +360,8 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `AUDIO_LANG` | `en` | Preferred audio language when a video has several dubbed tracks |
 | `PORT` | `3000` | Backend listen port |
 | `DATA_DIR` | `./data` (`/data` in the container) | Where the SQLite database `yt.db` is stored (must be writable) |
+| `ACCESS_TOKEN` | unset (open) | Shared secret (16-512 printable ASCII chars) required on `/api/*` and `/stream/*`; see "Access token" |
+| `REQUIRE_AUTH` | unset | `1` = refuse to start unless a valid `ACCESS_TOKEN` is set |
 | `ALLOWED_HOSTS` | unset (any; a warning is logged at start) | Comma-separated `Host` header values to accept, e.g. `192.168.1.10:8080`; others get 421. Set it: it blocks DNS-rebinding |
 | `MAX_STREAMS` | `3` | Concurrent video streams; extra requests get 503 |
 | `STREAM_MAX_SECONDS` | `21600` | Hard cap on one stream's duration |
@@ -388,6 +428,7 @@ backend/
   src/yt/rss.ts          channel RSS feeds
   src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
   src/history.ts         watch history and resume positions (SQLite)
+  src/auth.ts            optional shared access token: bearer/cookie checks, constant-time compare, failure limiter
   src/store.ts           subscriptions (SQLite, imports the old subscriptions.json; atomic bulk addSubs)
   src/subsio.ts          subscription import (Takeout CSV, OPML, URL list) and export parsers/writers
 frontend/

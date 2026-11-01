@@ -142,3 +142,7 @@ data class ImportSkipped(val invalid: Int = 0, val handles: Int = 0, val full: I
 
 @Serializable
 data class ApiError(val error: String = "")
+
+/** `GET /api/session`: whether the server wants an access token and whether this client's is accepted. */
+@Serializable
+data class SessionResponse(val auth: String, val authenticated: Boolean)

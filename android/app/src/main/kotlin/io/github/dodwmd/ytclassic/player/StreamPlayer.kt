@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.ui.semantics.Role
+import io.github.dodwmd.ytclassic.ui.LocalOpenSettings
 import io.github.dodwmd.ytclassic.ui.classicSliderColors
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -152,6 +153,10 @@ fun StreamPlayer(
             host.error?.let { message ->
                 Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(message, color = Color.White)
+                    if (host.needsToken) {
+                        val openSettings = LocalOpenSettings.current
+                        Button(onClick = openSettings) { Text("Open Settings") }
+                    }
                     Button(onClick = { host.retry() }) { Text("Retry") }
                 }
             }
