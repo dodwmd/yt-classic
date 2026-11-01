@@ -9,6 +9,7 @@ import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
+import { statusPage, statusReport } from "./status.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
 import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
@@ -190,6 +191,18 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const v = gate.authenticate(req, secret, ip);
     if (typeof v === "number") return tooMany(res, v);
     if (v !== "ok") return unauthorized(res);
+  }
+
+  if (path === "/api/status") return json(res, 200, await statusReport());
+  // Server-rendered, no JavaScript: the shipped JS is at its size budget, and this page is a plain readout.
+  if (path === "/status" && req.method === "GET") {
+    // A page, not an API call: with an access token set, send a visitor without a session to the login page.
+    if (secret) {
+      const v = gate.authenticate(req, secret, ip);
+      if (typeof v === "number") return tooMany(res, v);
+      if (v !== "ok") return void res.writeHead(303, { location: "/login?next=%2Fstatus", "cache-control": "no-store" }).end();
+    }
+    return void res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(statusPage(await statusReport()));
   }
 
   if (path === "/api/home") {

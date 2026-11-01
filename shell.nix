@@ -3,7 +3,9 @@
 
 let
   # nixpkgs lags behind YouTube breakage, so pin the upstream yt-dlp release.
-  # To update: bump the version and set sha256 to the output of
+  # To update: run scripts/bump-ytdlp.sh (verifies the release checksum and signature and edits this file and
+  # backend/Containerfile together; a weekly workflow does it as a PR). By hand: bump the version and set sha256 to
+  # the release's SHA2-256SUMS entry for yt-dlp (hex) or the output of
   #   nix-prefetch-url https://github.com/yt-dlp/yt-dlp/releases/download/<version>/yt-dlp
   ytDlpVersion = "2026.10.26";
   yt-dlp-latest = pkgs.stdenvNoCC.mkDerivation {

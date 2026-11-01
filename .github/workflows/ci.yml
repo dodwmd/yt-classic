@@ -34,6 +34,11 @@ jobs:
         run: npm run typecheck
       - name: Unit and integration tests
         run: npm test
+      - name: Shell scripts (shellcheck, and offline tests of the yt-dlp bump script)
+        working-directory: .
+        run: |
+          shellcheck scripts/*.sh
+          sh scripts/test-bump.sh
 
   changes:
     name: Detect changed areas

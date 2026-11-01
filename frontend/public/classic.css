@@ -44,6 +44,9 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .controls button:focus-visible, .controls input:focus-visible, .controls a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px #000; }
 a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
+#report { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font: 13px monospace; }
+#foot { margin-top: 32px; color: var(--muted); }
+
 /* --- Small screens and touch. Desktop rules above are untouched; everything below only applies on phones/tablets. --- */
 @media (max-width: 860px) {
   #masthead { flex-wrap: wrap; } #masthead form { display: flex; gap: 6px; min-width: 0; max-width: 100%; }

@@ -146,3 +146,36 @@ data class ApiError(val error: String = "")
 /** `GET /api/session`: whether the server wants an access token and whether this client's is accepted. */
 @Serializable
 data class SessionResponse(val auth: String, val authenticated: Boolean)
+
+/** GET /api/status: the backend's own health (yt-dlp version, last resolve outcomes, ffmpeg, storage). */
+@Serializable
+data class StatusResponse(
+    val health: String = "",
+    val ytdlp: ToolStatus = ToolStatus(),
+    val resolves: ResolveStats = ResolveStats(),
+    val ffmpeg: ToolStatus = ToolStatus(),
+    val node: String = "",
+    val uptimeSeconds: Long = 0,
+    val cache: CacheStatus = CacheStatus(),
+)
+
+@Serializable
+data class ToolStatus(val present: Boolean = false, val version: String? = null)
+
+@Serializable
+data class ResolveStats(
+    val ok: Int = 0,
+    val failed: Int = 0,
+    val consecutiveFailures: Int = 0,
+    val lastSuccess: ResolveSuccess? = null,
+    val lastFailure: ResolveFailure? = null,
+)
+
+@Serializable
+data class ResolveSuccess(val at: String = "")
+
+@Serializable
+data class ResolveFailure(val at: String = "", val reason: String = "")
+
+@Serializable
+data class CacheStatus(val ok: Boolean = false, val entries: Int = 0, val bytes: Long = 0)

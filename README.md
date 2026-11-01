@@ -183,8 +183,33 @@ memory/process limits. nginx is the non-root `nginx-unprivileged` image and sets
 related headers. Both base images are pinned by digest.
 
 **yt-dlp** is pinned and checksum-verified in `backend/Containerfile` (`YTDLP_VERSION`, `YTDLP_SHA256`); the
-container never updates it at runtime. When YouTube breaks playback, bump both values (the checksum is in the
-release's `SHA2-256SUMS`), keep `shell.nix` in step, and rebuild. The backend logs the yt-dlp version at start.
+container never updates it at runtime. A weekly workflow proposes the bump as a pull request (see
+[Keeping yt-dlp fresh](#keeping-yt-dlp-fresh)). To do it by hand: `scripts/bump-ytdlp.sh VERSION SUMS BINARY` with the
+release's downloaded `SHA2-256SUMS` and `yt-dlp` files (it verifies the checksum and edits both pins), then rebuild.
+The backend logs the yt-dlp version at start.
+
+### Status and health
+
+`GET /api/status` (same host allow-list and, if set, access token as the other `/api` routes; no secrets, URLs or paths) returns:
+
+```json
+{ "health": "ok",
+  "ytdlp": { "version": "2026.10.26", "present": true },
+  "resolves": { "ok": 1, "failed": 1, "consecutiveFailures": 0,
+                "lastSuccess": { "at": "<ISO time>" },
+                "lastFailure": { "at": "<ISO time>", "reason": "bot-check" } },
+  "ffmpeg": { "present": true, "version": "8.0.1" }, "node": "v22.22.0", "uptimeSeconds": 61,
+  "cache": { "ok": true, "entries": 12, "bytes": 48213 } }
+```
+
+`health` is `failing` when the last 3 real yt-dlp resolves failed with no success since, `degraded` when the latest
+resolve failed, yt-dlp cannot be run or the database is unusable, otherwise `ok`. Failures caused by the video itself
+(`unavailable`: private, removed, age-restricted, members-only) are counted and shown as the last failure, but never
+count toward `consecutiveFailures` or `health`. No video ids are returned (so the page stays safe to expose on a LAN). The yt-dlp version is read once from
+`yt-dlp --version` and refreshed lazily (hourly). `resolves.ok/failed` count since the process started; the last
+success and last failure (with a fixed reason label such as `bot-check`, `rate-limited`, `unavailable`, `timeout`,
+`network`) are kept in the SQLite `meta` table and survive restarts. Cache hits are not resolves. The web UI shows
+this at `/status` (rendered by the backend as plain text without JavaScript, because the shipped JS is at its size budget; link in the footer of the home page); the Android app has a Status button in Settings.
 
 **Network exposure.** `compose.yaml` publishes port 8080 on all interfaces. To limit it, change the mapping to
 `"127.0.0.1:8080:8080"` or your LAN address. Set `ALLOWED_HOSTS` (below) to guard against DNS-rebinding. The app has
@@ -264,7 +289,7 @@ Type checking uses **TypeScript 7** (`tsc`, the native compiler). Linting uses *
 
 `shell.nix` also picks up an optional, git-ignored `shell.local.nix` for personal tools. It is a function from `{ pkgs }` to a list of packages, for example `{ pkgs }: [ pkgs.ripgrep ]`.
 
-To update yt-dlp in the dev shell, bump `ytDlpVersion` and its `sha256` in `shell.nix` (the command is in the comment there).
+To update yt-dlp in the dev shell, run `scripts/bump-ytdlp.sh` (it edits `shell.nix` and `backend/Containerfile` together), or bump `ytDlpVersion` and `sha256` in `shell.nix` by hand (hex or base32 digests both work).
 
 ### Watch history and privacy
 
@@ -388,7 +413,7 @@ language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 | Error page: `YouTube API … 403 … IP address restriction` | The key is restricted to other IPs. Add the address named in the error to the key's restrictions, or remove the IP restriction. |
 | `YT_API_KEY is not set` | Create `backend/.env` from `backend/.env.example`. |
 | `502` from every page right after recreating the backend | nginx re-resolves the backend name every few seconds (`frontend/05-resolver.sh`), so it recovers on its own within about 5 s. If it persists, check `podman-compose logs frontend` for `05-resolver: using …` and `podman-compose logs backend`. |
-| Video won't start, or `/stream/…` returns 502 | yt-dlp is out of date or YouTube changed. Bump the pinned yt-dlp in `backend/Containerfile` and rebuild (`podman-compose up -d --build`). Check `podman-compose logs backend`; it prints the yt-dlp version at start. A 503 means all `MAX_STREAMS` slots are busy. |
+| Video won't start, or `/stream/…` returns 502 | yt-dlp is out of date or YouTube changed. Merge the weekly yt-dlp bump PR, or bump the pin (`scripts/bump-ytdlp.sh`), and rebuild; `/status` shows the version and the last failure reason (`podman-compose up -d --build`). Check `podman-compose logs backend`; it prints the yt-dlp version at start. A 503 means all `MAX_STREAMS` slots are busy. |
 | Wrong audio language on a dubbed video | Set `AUDIO_LANG`, or add `&a=<code>` to the watch URL. |
 | Feed missing some channels | YouTube's RSS endpoint is occasionally flaky; the backend retries and skips channels that fail. Reload. |
 | Old styling after an update | Hard refresh (Ctrl+Shift+R) once. Static files are served with `no-cache` and revalidate after that. |
@@ -409,7 +434,57 @@ GitHub Actions, in `.github/workflows/`:
 - **`cd.yml`** builds a signed release APK and publishes it to GitHub Releases when a change under `android/` is merged to
   `main` (or when run by hand). Third-party actions are pinned to commit SHAs and the signing secrets are only given to the
   build step. There is no server deployment target yet.
+- **`ytdlp-bump.yml`**: see below.
 - Dependabot proposes weekly updates for the backend and frontend npm packages and for the actions themselves.
+
+### Keeping yt-dlp fresh
+
+`.github/workflows/ytdlp-bump.yml` runs weekly (Mondays) and on demand (Actions tab, "Run workflow"). It:
+
+1. finds the latest yt-dlp release through the GitHub API and **waits until it is at least 48 hours old** (override with
+   the `min_age_hours` input when dispatching by hand), a window in which a bad or compromised release is usually pulled;
+2. downloads the `yt-dlp` binary and `SHA2-256SUMS` and checks the binary's checksum, and, if the release ships
+   `SHA2-256SUMS.sig`, the signature too (below);
+3. runs `scripts/smoke-ytdlp.sh`, which resolves a stream URL for the public video `jNQXAC9IVRw` with the new binary;
+4. opens or updates a pull request from `bot/yt-dlp-<version>` that edits the pin in `backend/Containerfile` and
+   `shell.nix`, and closes an older open bump PR from this repository as superseded.
+
+Only the second job has `contents: write` and `pull-requests: write`. It re-downloads, re-verifies, and refuses unless
+the binary is byte-identical (same SHA-256) to the one the first job tested. The first job's checkout keeps no
+credentials, because it runs the downloaded binary. The edit itself is `scripts/bump-ytdlp.sh` (idempotent; refuses on a
+checksum mismatch, a bad signature, a missing or duplicate checksum entry, a bad version or a changed pin layout),
+tested offline by `scripts/test-bump.sh`, which CI runs together with `shellcheck`.
+
+What is verified, precisely: the checksum check is **integrity against the release's own `SHA2-256SUMS`, the same trust
+root as the release itself**; someone who can replace the binary on GitHub can replace that file too. Authenticity comes
+from the GPG signature: the yt-dlp project publishes its signing key at
+<https://github.com/yt-dlp/yt-dlp/blob/master/public.key> (linked from its README, "Release Files"). That file is
+committed here as `scripts/yt-dlp-release.pub`; the fingerprint pinned in `scripts/bump-ytdlp.sh`
+(`AC0CBBE6848D6A873464AF4E57CF65933B5A7581`, "Simon Sawicki (yt-dlp signing key)") was computed from that copy on
+2026-11-02, because the project does not publish the fingerprint anywhere else, and the 2026.10.26 release's signature
+was checked against it (that real signature is a test fixture). So the trust is "the key yt-dlp's repo served that day",
+visible in this repo's history. If the project rotates its key, verification fails closed and a person has to review and
+replace the key and fingerprint. Releases without a signature are still bumped, with the PR saying "not verified".
+
+The smoke test is **advisory**. YouTube often answers GitHub's data-centre IPs with "confirm you're not a bot" (also
+rate limits or no network); then the result is `inconclusive`, the PR is still opened and says so, and you should try
+the new yt-dlp yourself. If yt-dlp crashes, prints no URL or fails for any other reason, the run fails and no PR is
+opened.
+
+Limitations, honestly:
+
+- **CI does not start on the bot's PR.** GitHub does not trigger workflows for pull requests created with the default
+  `GITHUB_TOKEN`, so the required checks stay pending and `main`'s protection keeps the PR unmergeable. Close and
+  reopen the PR (or push an empty commit to the branch from your account) to start CI. To avoid that, create a
+  fine-grained personal access token with contents and pull-requests write on this repo and store it as the secret
+  `YTDLP_BUMP_TOKEN`; the workflow then uses it, and CI starts by itself. Either way the PR still needs its required
+  checks and your review: nothing is merged automatically and no protection is bypassed.
+- **Reviews on bot PRs.** A PR authored with your PAT is *your* PR, and GitHub does not let you approve your own PR. If
+  `main` requires reviews, you can only merge it with the admin bypass; the alternative is a token from a separate bot
+  account or a GitHub App (store its token as `YTDLP_BUMP_TOKEN`), so a person other than the author can approve.
+- The repository setting "Allow GitHub Actions to create and approve pull requests" must be enabled (Settings,
+  Actions, General), unless you use the token above.
+- The smoke test covers one ordinary public video, not age-restricted, region-blocked or live ones.
 
 Run the same checks locally with `nix-shell --run 'cd backend && npm run check && cd ../frontend && npm run check'`.
 
@@ -423,6 +498,7 @@ backend/
   src/app.ts             routes and request handling
   src/yt/api.ts          YouTube Data API client
   src/yt/dlp.ts          yt-dlp URL resolution + live ffmpeg remux
+  src/status.ts          /api/status: resolve counters, persisted last success/failure, health
   src/yt/search.ts       yt-dlp search (Data API fallback)
   src/yt/innertube.ts    related videos from YouTube's /next
   src/yt/rss.ts          channel RSS feeds
@@ -438,6 +514,7 @@ frontend/
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
   05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line
+scripts/                 bump-ytdlp.sh (verify + pin a yt-dlp release), smoke-ytdlp.sh, test-bump.sh, yt-dlp-release.pub (signing key), testdata/
 android/                 the native Android app (Kotlin + Compose); has its own shell.nix and Gradle wrapper
 compose.yaml             runs both containers
 shell.nix                dev shell
