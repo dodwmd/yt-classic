@@ -11,7 +11,7 @@ import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
-import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, parseImport } from "./subsio.ts";
+import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
@@ -244,7 +244,8 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
       return json(res, 400, { error: "No subscriptions found. Use a Google Takeout subscriptions.csv, an OPML file, or a list of channel URLs." });
     }
     const { added, existing, full, total } = await addSubs(parsed.subs);
-    return json(res, 200, { added, existing, skipped: { invalid: parsed.invalid, handles: parsed.handles, full }, total });
+    const result = { added, existing, skipped: { invalid: parsed.invalid, handles: parsed.handles, full }, total };
+    return json(res, 200, { ...result, message: importMessage(result) });
   }
 
   if (req.method === "GET" && path === "/api/subscriptions/export") {

@@ -53,31 +53,56 @@ function classify(ref: string, title: string): Found {
  */
 export function parseCsv(text: string): { rows: string[][]; lost: number } {
   const rows: string[][] = [];
+  const n = text.length;
   let row: string[] = [];
   let field = "";
   let quoted = false;
   let breaks = 0;
-  for (let i = 0; i < text.length; i++) {
-    const c = text[i];
+  let i = 0;
+  // Runs of ordinary characters are copied as slices, not one character at a time (this runs on up to 1 MB).
+  while (i < n) {
     if (quoted) {
-      if (c !== '"') {
-        field += c;
-        if (c === "\n" || (c === "\r" && text[i + 1] !== "\n")) breaks++;
-      } else if (text[i + 1] === '"') {
+      const q = text.indexOf('"', i);
+      const chunk = text.slice(i, q < 0 ? n : q);
+      field += chunk;
+      for (let k = 0; k < chunk.length; k++) {
+        const c = chunk.charCodeAt(k);
+        if (c === 10 || (c === 13 && chunk.charCodeAt(k + 1) !== 10)) breaks++;
+      }
+      if (q < 0) break;
+      if (text[q + 1] === '"') {
         field += '"';
-        i++;
-      } else quoted = false;
-    } else if (c === '"' && field === "") quoted = true;
-    else if (c === ",") {
+        i = q + 2;
+      } else {
+        quoted = false;
+        i = q + 1;
+      }
+      continue;
+    }
+    const c = text[i];
+    if (c === '"' && field === "") {
+      quoted = true;
+      i++;
+    } else if (c === ",") {
       row.push(field);
       field = "";
+      i++;
     } else if (c === "\n" || c === "\r") {
-      if (c === "\r" && text[i + 1] === "\n") i++;
+      i += c === "\r" && text[i + 1] === "\n" ? 2 : 1;
       row.push(field);
       field = "";
       if (row.length > 1 || row[0] !== "") rows.push(row); // skip blank lines
       row = [];
-    } else field += c;
+    } else {
+      let j = i + 1;
+      while (j < n) {
+        const cc = text.charCodeAt(j);
+        if (cc === 44 || cc === 34 || cc === 10 || cc === 13) break;
+        j++;
+      }
+      field += text.slice(i, j);
+      i = j;
+    }
   }
   if (quoted) return { rows, lost: Math.max(1, breaks + 1 - (/[\r\n]$/.test(field) ? 1 : 0)) };
   row.push(field);
@@ -241,3 +266,13 @@ export function exportOpml(subs: Subscription[]): string {
   ].join("\n");
 }
 
+
+/** One sentence describing an import result, for clients that just want to show it (the web page does). */
+export function importMessage(r: { added: number; existing: number; skipped: { invalid: number; handles: number; full: number }; total: number }): string {
+  const skipped = [
+    r.skipped.invalid && `${r.skipped.invalid} invalid`,
+    r.skipped.handles && `${r.skipped.handles} @handle (can't be resolved)`,
+    r.skipped.full && `${r.skipped.full} over the limit of 500`,
+  ].filter(Boolean);
+  return `Added ${r.added}, ${r.existing} already subscribed.${skipped.length ? ` Skipped ${skipped.join(", ")}.` : ""} You now have ${r.total} ${r.total === 1 ? "subscription" : "subscriptions"}.`;
+}

@@ -295,6 +295,12 @@ test("video and home expose progress / continue; watched lookup", async () => {
 });
 
 const A = "UC" + "1".repeat(22), B = "UC" + "2".repeat(22);
+// The response also carries a human-readable `message`; most tests compare only the counts.
+const counts = (body: string) => {
+  const { message, ...rest } = JSON.parse(body);
+  assert.equal(typeof message, "string");
+  return rest;
+};
 const importPost = (body: string | Buffer, headers: Record<string, string> = {}) =>
   get("/api/subscriptions/import", { method: "POST", body, headers: { "content-type": "text/plain", ...headers } });
 const subIds = async () => (JSON.parse((await get("/api/home")).body).subs as { id: string }[]).map((s) => s.id);
@@ -303,9 +309,10 @@ test("import: CSV, response shape, then re-import reports existing; handles and 
   const csv = `\uFEFFChannel ID,Channel URL,Channel title\r\n${A},http://www.youtube.com/channel/${A},"One, the first"\r\n${B},,Two\r\n,https://www.youtube.com/@h,H\r\nbad,,X\r\n`;
   const r = await importPost(csv);
   assert.equal(r.status, 200);
-  assert.deepEqual(JSON.parse(r.body), { added: 2, existing: 0, skipped: { invalid: 1, handles: 1, full: 0 }, total: 2 });
+  assert.deepEqual(counts(r.body), { added: 2, existing: 0, skipped: { invalid: 1, handles: 1, full: 0 }, total: 2 });
+  assert.equal(JSON.parse(r.body).message, "Added 2, 0 already subscribed. Skipped 1 invalid, 1 @handle (can't be resolved). You now have 2 subscriptions.");
   assert.deepEqual(await subIds(), [A, B]);
-  assert.deepEqual(JSON.parse((await importPost(`${A}\n${B}\n`)).body), { added: 0, existing: 2, skipped: { invalid: 0, handles: 0, full: 0 }, total: 2 });
+  assert.deepEqual(counts((await importPost(`${A}\n${B}\n`)).body), { added: 0, existing: 2, skipped: { invalid: 0, handles: 0, full: 0 }, total: 2 });
   for (const id of [A, B]) await get("/api/unsubscribe", { method: "POST", body: `id=${id}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
 });
 
@@ -329,7 +336,7 @@ test("import: cross-site POSTs are refused and change nothing", async () => {
 
 test("import: MAX_SUBS overflow is reported as skipped.full", async () => {
   const many = Array.from({ length: 503 }, (_, i) => "UC" + String(i).padStart(22, "0")).join("\n");
-  const r = JSON.parse((await importPost(many)).body);
+  const r = counts((await importPost(many)).body);
   assert.deepEqual(r, { added: 500, existing: 0, skipped: { invalid: 0, handles: 0, full: 3 }, total: 500 });
   const csv = (await get("/api/subscriptions/export")).body;
   assert.equal(csv.trim().split("\r\n").length, 501);

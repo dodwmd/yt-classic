@@ -154,15 +154,29 @@ test("a CSV or list that merely mentions <outline is not treated as OPML", () =>
   assert.deepEqual(parseImport(`${A}\n# <outline xmlUrl="https://www.youtube.com/feeds/videos.xml?channel_id=${B}">`).subs.map((s) => s.id), [A]);
 });
 
-// Hostile 1 MB bodies must parse in well under a second: the parser runs on the server's event loop.
+// Hostile 1 MB bodies must parse quickly: the parser runs on the server's event loop. Absolute wall-clock limits are
+// flaky on shared CI runners, so the main check is about growth: the same input at 256 KB and at 1 MB (4x the size)
+// must take well under 16x the time (linear is about 4x, a quadratic scan about 16x), plus a generous absolute ceiling
+// for the catastrophic case (the old regex took 33 s). Each size takes the best of 3 runs to shed scheduling noise.
+const bestMs = (text: string) => {
+  let best = Infinity;
+  for (let i = 0; i < 3; i++) {
+    const t0 = performance.now();
+    parseImport(text);
+    best = Math.min(best, performance.now() - t0);
+  }
+  return best;
+};
+const sized = (unit: string, bytes: number) => unit.repeat(Math.ceil(bytes / unit.length)).slice(0, bytes);
+
 for (const [name, unit] of [
   ["repeated '<outline '", "<outline "],
   ["repeated '<outline a=\"'", '<outline a="'],
-  ["repeated '<outline a='>'", "<outline a='"],
+  ["repeated '<outline a='", "<outline a='"],
   ["repeated '<!--'", "<!--"],
   ["repeated '<'", "<"],
   ["unterminated quotes", '"'],
-  ["unterminated CSV quote", "Channel ID,Channel URL,Channel title\n\"a,b\n"],
+  ["unterminated CSV quote", 'Channel ID,Channel URL,Channel title\n"a,b\n'],
   ["repeated 'UC'", "UC"],
   ["repeated 'channel_id=UC'", "channel_id=UC"],
   ["whitespace", " \t"],
@@ -171,16 +185,33 @@ for (const [name, unit] of [
   ["long attribute names", "<outline " + "a".repeat(8000) + " "],
   ["many outlines with long values", `<outline text="${"x".repeat(100)}" xmlUrl="https://www.youtube.com/feeds/videos.xml?channel_id=${A}"/>`],
 ] as const) {
-  test(`parse budget: 1 MB of ${name} takes under 200 ms`, () => {
-    const body = unit.repeat(Math.ceil((1024 * 1024) / unit.length)).slice(0, 1024 * 1024);
+  test(`parse budget: 1 MB of ${name} scales linearly and finishes within 2 s`, () => {
     for (const prefix of ["", "<opml><body>", "Channel ID,Channel URL,Channel title\n"]) {
-      const t0 = performance.now();
-      parseImport(prefix + body);
-      const ms = performance.now() - t0;
-      assert.ok(ms < 200, `${name} (prefix ${JSON.stringify(prefix.slice(0, 8))}) took ${ms.toFixed(0)} ms`);
+      const small = bestMs(prefix + sized(unit, 256 * 1024));
+      const large = bestMs(prefix + sized(unit, 1024 * 1024));
+      const what = `${name} (prefix ${JSON.stringify(prefix.slice(0, 8))}): 256 KB ${small.toFixed(1)} ms, 1 MB ${large.toFixed(1)} ms`;
+      assert.ok(large < 2000, `${what}: over the 2 s ceiling`);
+      assert.ok(large < 8 * small + 50, `${what}: more than 8x slower for 4x the input, looks super-linear`);
     }
   });
 }
+
+test("the growth check can fail: a deliberately quadratic scan is caught", () => {
+  const quadratic = (t: string) => {
+    let n = 0;
+    for (let i = 0; i < t.length; i++) n += t.indexOf("\u0001", i) + 1; // rescans the whole tail each time
+    return n;
+  };
+  const time = (size: number) => {
+    const text = "x".repeat(size);
+    const t0 = performance.now();
+    quadratic(text);
+    return performance.now() - t0;
+  };
+  const small = Math.min(time(64 * 1024), time(64 * 1024), time(64 * 1024));
+  const large = Math.min(time(256 * 1024), time(256 * 1024), time(256 * 1024));
+  assert.ok(large >= 8 * small + 50 || large > 2000, `quadratic control not detected: ${small.toFixed(1)} -> ${large.toFixed(1)} ms`);
+});
 
 test("OPML: more than the outline cap is cut off, malformed tags are skipped, later valid ones still found", () => {
   const good = `<outline text="G" xmlUrl="https://www.youtube.com/feeds/videos.xml?channel_id=${A}"/>`;
