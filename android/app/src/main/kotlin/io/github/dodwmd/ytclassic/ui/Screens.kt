@@ -77,7 +77,7 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
                     }
                 }
                 item { SectionTitle("New from your subscriptions") }
-                items(home.feed, key = { it.id }) { FeedRow(it, onVideo) }
+                items(home.feed.distinctBy { it.id }, key = { it.id }) { FeedRow(it, onVideo) }
             }
         }
     }
@@ -87,7 +87,8 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
 fun SearchScreen(api: YtApi, query: String, onVideo: (String) -> Unit) {
     val first = rememberLoad(query) { api.search(query) }
     LoadedContent(first) { page ->
-        var items by remember(page) { mutableStateOf(page.items) }
+        // Duplicate ids would crash the list (they are its keys), so drop any the server sends.
+        var items by remember(page) { mutableStateOf(page.items.distinctBy { it.id }) }
         var token by remember(page) { mutableStateOf(page.nextPageToken) }
         var failure by remember(page) { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
@@ -125,7 +126,7 @@ fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit) {
         var subscribed by remember(c) { mutableStateOf(c.subscribed) }
         var busy by remember(c) { mutableStateOf(false) }
         var failure by remember(c) { mutableStateOf<String?>(null) }
-        var items by remember(c) { mutableStateOf(c.page.items) }
+        var items by remember(c) { mutableStateOf(c.page.items.distinctBy { it.id }) }
         var token by remember(c) { mutableStateOf(c.page.nextPageToken) }
         var showAbout by remember(c) { mutableStateOf(false) }
         val scope = rememberCoroutineScope()

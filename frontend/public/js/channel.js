@@ -31,9 +31,13 @@ run(async () => {
         body: new URLSearchParams({ id }),
       });
       on = res.subscribed;
+      button.title = "";
+      $("#sub-error").textContent = "";
       paint();
     } catch (err) {
-      button.textContent = err.message;
+      paint();
+      button.title = err.message; // keep the label; show why it failed on hover and to screen readers
+      $("#sub-error").textContent = err.message;
     } finally {
       button.disabled = false;
     }
