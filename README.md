@@ -221,7 +221,19 @@ and `ANDROID_KEY_PASSWORD`; keep a backup of the keystore, because losing it mea
 phones it also switches to landscape; Android 16+ ignores orientation requests on large screens (smallest width of
 600dp or more) and in multi-window, so there only the bars are hidden. Tap the video to hide the controls, Back to leave.
 
-**Not in v1:** background audio, picture-in-picture, offline downloads, Play Store publishing.
+**Background audio:** playback continues when you press Home or the screen turns off. A media notification (title,
+channel, thumbnail, play/pause and a seek bar showing the real position and length) appears, and the lock screen and
+headset/Bluetooth buttons control it. Seeking from the notification restarts the stream at that offset, like the seek
+bar. Android 13+ asks for notification permission the first time something plays; if you say no, audio still
+continues, only the notification is hidden. The player lives in a foreground service (`mediaPlayback`) and ends, with
+its notification, when the video finishes, when you stop it (or dismiss the notification), when it fails while the app
+is in the background, or when you swipe the app away while paused. Leaving the watch screen with the app open still
+stops playback. Settings has **Keep playing in the background** (on by default); turn it off and the app pauses and
+removes the notification whenever it goes to the background. Headset and Bluetooth buttons only work while the
+service is alive: it is stopped after the video finishes, after you stop it, after an error in the background, and (with
+the setting off) whenever the app is in the background, so open the app and press Play again.
+
+**Not yet:** picture-in-picture, offline downloads, Play Store publishing.
 
 **Testing it without a phone:** the shell can add an emulator (needs KVM, about 2 GB more):
 

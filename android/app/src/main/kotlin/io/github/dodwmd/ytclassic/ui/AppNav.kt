@@ -22,6 +22,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
@@ -51,7 +52,7 @@ import io.github.dodwmd.ytclassic.App
 import kotlinx.coroutines.flow.first
 
 @Composable
-fun AppNav(app: App) {
+fun AppNav(app: App, openVideoId: String? = null) {
     val nav = rememberNavController()
     var query by rememberSaveable { mutableStateOf("") }
     // The player is fullscreen: no masthead. Deliberately not saved: only a composed player enforces it, so after
@@ -64,6 +65,13 @@ fun AppNav(app: App) {
 
     // First launch: no server yet, so start on Settings (not Home, which would show an error under it).
     val start by produceState<String?>(null) { value = if (app.settings.serverUrl.first().isBlank()) "settings" else "home" }
+    // Opened from the media notification while a video plays on: show that video (the back stack ends at the start page).
+    LaunchedEffect(start) {
+        if (start != null && openVideoId != null) {
+            nav.currentBackStackEntryFlow.first() // the graph is set once the start page has its entry
+            nav.navigate("watch/$openVideoId")
+        }
+    }
     val toHome: () -> Unit = { nav.navigate("home") { popUpTo(nav.graph.id) { inclusive = true } } }
 
     val openVideo = { id: String -> nav.navigate("watch/$id") }
