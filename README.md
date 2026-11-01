@@ -187,6 +187,8 @@ GitHub Actions, in `.github/workflows/`:
 - **`cd.yml`** is a placeholder (manual trigger, does nothing). There is no deployment target yet.
 - Dependabot proposes weekly updates for npm packages and the actions themselves.
 
+Run the same checks locally (lint, types, tests) with `nix-shell --run 'cd backend && npm run check'`.
+
 Because CI only runs on pull requests, changes pushed straight to `main` are not checked. To make the checks
 binding, protect `main` (Settings → Branches → require a pull request and the CI jobs to pass).
 
