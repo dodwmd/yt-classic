@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Android 17 blocks apps that target SDK 37 from the local network (the backend on your home Wi-Fi) until this
+         is granted at runtime. MainActivity asks for it. -->
+    <uses-permission android:name="android.permission.ACCESS_LOCAL_NETWORK" />
 
     <!-- usesCleartextTraffic: the backend is reached over plain http on your own network (home Wi-Fi or a VPN),
          at an address you type in Settings, so it can't be listed in advance. -->

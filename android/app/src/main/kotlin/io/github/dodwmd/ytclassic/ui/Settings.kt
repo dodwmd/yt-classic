@@ -83,7 +83,8 @@ fun SettingsScreen(app: App, onDone: () -> Unit) {
                     } else {
                         status = "Testing…"
                         ok = YtApi(server = { address }, client = testClient).ping()
-                        status = if (ok) "Connected to $url" else "Can't reach $url"
+                        status = if (ok) "Connected to $url" else "Can't reach $url. Check the address and Wi-Fi. " +
+                            "On Android 17+, also allow Local network / Nearby devices for this app in system settings."
                     }
                 }
             }) { Text("Test connection") }
