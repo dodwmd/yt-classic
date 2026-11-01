@@ -12,6 +12,11 @@ const xml = `<feed><yt:channelId>UCabc</yt:channelId><title>Chan</title>
 <title>Tom &amp; Jerry</title><author><name>Chan</name></author><published>2026-10-01T10:00:00+00:00</published><media:group><media:description>Hello &amp; bye</media:description><media:community><media:statistics views="1234"/></media:community></media:group></entry>
 <entry><yt:videoId>BBBBBBBBBBB</yt:videoId><title>Two</title><author><name>Chan</name></author><published>2026-10-02T10:00:00+00:00</published></entry></feed>`;
 
+test("parseFeed survives invalid numeric character references", () => {
+  const items = parseFeed("<entry><yt:videoId>AAAAAAAAAAA</yt:videoId><title>a &#x110000; b &#xD800; c &#65;</title></entry>");
+  assert.equal(items[0].title, "a � b � c A");
+});
+
 test("parseFeed", () => {
   const items = parseFeed(xml);
   assert.equal(items.length, 2);

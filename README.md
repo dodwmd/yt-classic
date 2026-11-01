@@ -211,7 +211,7 @@ Wi-Fi, or its VPN host name when you're away, then **Test connection** and **Sav
 from the API and *restarts* the stream at `?t=<seconds>` when you drag the seek bar or change quality (the web
 player does the same). Expect a second or two of buffering after a seek.
 
-**Releases:** every merge to `main` publishes a signed release APK to
+**Releases:** every merge to `main` that touches `android/` publishes a signed release APK to
 [GitHub Releases](../../releases) (`cd.yml`, tag `v<versionName>-<run number>`). Download it on your phone and allow
 "Install unknown apps" for your browser. All releases are signed with the same key, so each one installs over the last.
 The key comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
@@ -261,10 +261,12 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `AUDIO_LANG` | `en` | Preferred audio language when a video has several dubbed tracks |
 | `PORT` | `3000` | Backend listen port |
 | `DATA_DIR` | `./data` (`/data` in the container) | Where the SQLite database `yt.db` is stored (must be writable) |
-| `ALLOWED_HOSTS` | unset (any) | Comma-separated `Host` header values to accept, e.g. `192.168.1.10:8080`; others get 421 |
+| `ALLOWED_HOSTS` | unset (any; a warning is logged at start) | Comma-separated `Host` header values to accept, e.g. `192.168.1.10:8080`; others get 421. Set it: it blocks DNS-rebinding |
 | `MAX_STREAMS` | `3` | Concurrent video streams; extra requests get 503 |
 | `STREAM_MAX_SECONDS` | `21600` | Hard cap on one stream's duration |
-| `SEARCH_FALLBACK_MAX` | `20` | Daily cap on search falling back to the Data API (100 quota units each) |
+| `SEARCH_FALLBACK_MAX` | `20` | Daily cap on Data API searches (100 quota units each), including their follow-on pages |
+
+The numeric settings must be whole numbers; anything else is logged and the default is used.
 
 URL parameters on the watch page: `q` (quality: 360, 480, 720, 1080), `t` (start offset in seconds), `a` (audio
 language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
@@ -303,7 +305,9 @@ GitHub Actions, in `.github/workflows/`:
   - security: gitleaks over the full history, `npm audit`, dependency review, hadolint on the Containerfiles;
   - `docker compose build`;
   - Android build, unit tests and lint (only when `android/` changed), with the debug APK attached to the run.
-- **`cd.yml`** is a placeholder (manual trigger, does nothing). There is no deployment target yet.
+- **`cd.yml`** builds a signed release APK and publishes it to GitHub Releases when a change under `android/` is merged to
+  `main` (or when run by hand). Third-party actions are pinned to commit SHAs and the signing secrets are only given to the
+  build step. There is no server deployment target yet.
 - Dependabot proposes weekly updates for the backend and frontend npm packages and for the actions themselves.
 
 Run the same checks locally with `nix-shell --run 'cd backend && npm run check && cd ../frontend && npm run check'`.
@@ -314,7 +318,8 @@ Run the same checks locally with `nix-shell --run 'cd backend && npm run check &
 
 ```
 backend/
-  src/server.ts          routes and request handling
+  src/server.ts          starts the server, shuts down cleanly
+  src/app.ts             routes and request handling
   src/yt/api.ts          YouTube Data API client
   src/yt/dlp.ts          yt-dlp URL resolution + live ffmpeg remux
   src/yt/search.ts       yt-dlp search (Data API fallback)

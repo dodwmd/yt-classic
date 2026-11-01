@@ -1,5 +1,6 @@
 import { cached } from "../cache.ts";
 import { fetchT } from "../http.ts";
+import { limiter } from "../limit.ts";
 import { channelVideos } from "./api.ts";
 import type { Subscription } from "../store.ts";
 
@@ -13,9 +14,11 @@ export interface FeedItem {
   description?: string;
 }
 
+// Out-of-range or surrogate references (which String.fromCodePoint rejects or mangles) become U+FFFD instead of throwing.
+const codePoint = (n: number) => (n <= 0x10ffff && (n < 0xd800 || n > 0xdfff) ? String.fromCodePoint(n) : "�");
 const decode = (s: string) =>
-  s.replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
-    .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(Number(d)))
+  s.replace(/&#x([0-9a-f]+);/gi, (_, h) => codePoint(parseInt(h, 16)))
+    .replace(/&#(\d+);/g, (_, d) => codePoint(Number(d)))
     .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;|&apos;/g, "'").replace(/&amp;/g, "&");
 const tag = (xml: string, name: string) => {
   const m = new RegExp(`<${name}>([^<]*)</${name}>`).exec(xml);
@@ -34,6 +37,9 @@ export function parseFeed(xml: string): FeedItem[] {
     description: tag(e, "media:description").slice(0, 300) || undefined,
   })).filter((i) => i.id);
 }
+
+// A cold home page would otherwise open one request per subscription (up to 500) at the same moment.
+const rssSlots = limiter(8, Infinity);
 
 async function fetchRss(id: string): Promise<FeedItem[]> {
   let status = 0;
@@ -59,7 +65,7 @@ async function uploadsAsFeed(id: string): Promise<FeedItem[]> {
 export function channelFeed(id: string): Promise<FeedItem[]> {
   return cached(`rss:${id}`, 15 * 60_000, async () => {
     try {
-      return await fetchRss(id);
+      return await rssSlots.run(() => fetchRss(id));
     } catch (e) {
       // YouTube's feed endpoint intermittently answers 404/500 for minutes at a time. Don't blank the home page.
       console.error(`${(e as Error).message}; falling back to the Data API`);

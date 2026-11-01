@@ -14,6 +14,9 @@ try {
 const port = Number(process.env.PORT ?? 3000);
 const server = createApp();
 server.listen(port, () => console.log(`backend listening on :${port}`));
+if (!process.env.ALLOWED_HOSTS?.trim()) {
+  console.warn("ALLOWED_HOSTS is not set: any Host header is accepted, so DNS-rebinding is not blocked. Set it to the address(es) you use.");
+}
 execFile(process.env.YTDLP_BIN ?? "yt-dlp", ["--version"], (err, out) =>
   console.log(err ? `yt-dlp not runnable: ${err.message}` : `yt-dlp ${out.trim()}`),
 );

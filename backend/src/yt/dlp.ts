@@ -2,6 +2,7 @@ import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { cached } from "../cache.ts";
+import { envInt } from "../env.ts";
 import { limiter } from "../limit.ts";
 
 const run = promisify(execFile);
@@ -15,8 +16,8 @@ const FFMPEG = () => process.env.FFMPEG_BIN ?? "ffmpeg";
 
 // Bound the work one client (or one hostile web page) can make the host do.
 export const resolveSlots = limiter(3, 10);
-const streamSlots = limiter(Number(process.env.MAX_STREAMS ?? 3), 0);
-const MAX_STREAM_MS = Number(process.env.STREAM_MAX_SECONDS ?? 6 * 3600) * 1000;
+const streamSlots = limiter(envInt("MAX_STREAMS", 3), 0);
+const MAX_STREAM_MS = Math.max(1, envInt("STREAM_MAX_SECONDS", 6 * 3600)) * 1000;
 
 /** Live child processes, so shutdown can reap them. */
 export const children = new Set<ChildProcess>();

@@ -5,6 +5,8 @@ name: CD
 on:
   push:
     branches: [main]
+    # Only the app is released, so backend, frontend and doc changes don't publish a new APK.
+    paths: ["android/**", ".github/workflows/cd.yml"]
   workflow_dispatch:
 
 concurrency:
@@ -22,33 +24,33 @@ jobs:
       contents: write # to create the tag and the release
     env:
       ANDROID_VERSION_CODE: ${{ github.run_number }}
-      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
     steps:
-      - uses: actions/checkout@v7
+      # Third-party actions are pinned to commit SHAs (the tag is in the comment; Dependabot bumps both).
+      # The signing secrets are given only to the one step that needs them, not to the whole job.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6
+      - name: Accept SDK licenses (the runner's SDK is writable, so Gradle can fetch what's missing)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
 
-      - name: Decode the signing keystore (fails if the secrets are missing)
+      - name: Build the signed release APK (fails if the signing secrets are missing)
+        working-directory: android
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           for v in KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
             if [ -z "${!v}" ]; then echo "::error::Signing secret for $v is not set"; exit 1; fi
           done
-          echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
-          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
-
-      - uses: actions/setup-java@v6
-        with:
-          distribution: temurin
-          java-version: 17
-      - uses: gradle/actions/setup-gradle@v6
-      - name: Accept SDK licenses (the runner's SDK is writable, so Gradle can fetch what's missing)
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
-
-      - name: Build the signed release APK
-        working-directory: android
-        run: ./gradlew --console=plain :app:assembleRelease
+          keystore="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$keystore"' EXIT
+          echo "$KEYSTORE_BASE64" | base64 -d > "$keystore"
+          ANDROID_KEYSTORE_PATH="$keystore" ./gradlew --console=plain :app:assembleRelease
 
       - name: Name and verify the APK
         id: apk

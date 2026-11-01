@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { cached } from "../cache.ts";
+import { envInt } from "../env.ts";
 import { apiSearch, type SearchPage, type VideoSummary } from "./api.ts";
 import { resolveSlots } from "./dlp.ts";
 
@@ -35,7 +36,7 @@ let fallbackUsed = 0;
 function fallbackAllowed(): boolean {
   const day = new Date().toISOString().slice(0, 10);
   if (day !== fallbackDay) [fallbackDay, fallbackUsed] = [day, 0];
-  return fallbackUsed++ < Number(process.env.SEARCH_FALLBACK_MAX ?? 20);
+  return fallbackUsed++ < envInt("SEARCH_FALLBACK_MAX", 20);
 }
 
 /**
@@ -43,7 +44,11 @@ function fallbackAllowed(): boolean {
  * Anything else is treated as page 1.
  */
 export function search(q: string, pageToken = ""): Promise<SearchPage> {
-  if (pageToken.startsWith("g:")) return apiPage(q, pageToken.slice(2));
+  if (pageToken.startsWith("g:")) {
+    // Every Data API search costs 100 quota units, whoever asks for it: the daily cap covers these pages too.
+    if (!fallbackAllowed()) return Promise.reject(new Error("Data API search cap reached for today"));
+    return apiPage(q, pageToken.slice(2));
+  }
   const page = /^\d{1,2}$/.test(pageToken) ? Math.min(MAX_PAGES, Math.max(1, Number(pageToken))) : 1;
   return cached(`ytsearch:${q}:${page}`, 10 * 60_000, async () => {
     try {
