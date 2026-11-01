@@ -18,6 +18,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.ui.semantics.Role
+import io.github.dodwmd.ytclassic.ui.classicSliderColors
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -92,6 +96,7 @@ fun StreamPlayer(
     var dragging by remember(video.id) { mutableStateOf<Float?>(null) }
 
     var controlsVisible by remember(video.id) { mutableStateOf(true) }
+    LaunchedEffect(fullscreen) { if (fullscreen) controlsVisible = true } // hidden controls must not outlive a fullscreen session
     FullscreenEffect(fullscreen)
     BackHandler(enabled = fullscreen) { onFullscreen(false) }
 
@@ -174,7 +179,7 @@ fun StreamPlayer(
             TextButton(
                 onClick = { if (finished) load(0) else if (isPlaying) player.pause() else player.play() },
                 modifier = Modifier.semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
-            ) { Text(if (finished) "↻" else if (isPlaying) "❚❚" else "▶", color = textColor) }
+            ) { PlayerIconView(if (finished) PlayerIcon.Replay else if (isPlaying) PlayerIcon.Pause else PlayerIcon.Play, textColor, iconSize = if (finished) 36.dp else 28.dp) }
             if (total > 0) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
@@ -184,6 +189,7 @@ fun StreamPlayer(
                         dragging = null
                     },
                     valueRange = 0f..total.toFloat(),
+                    colors = classicSliderColors(overVideo = fullscreen),
                     modifier = Modifier.weight(1f).semantics {
                         contentDescription = "Seek"
                         stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}"
@@ -194,10 +200,11 @@ fun StreamPlayer(
             TextButton(
                 onClick = { onFullscreen(!fullscreen) },
                 modifier = Modifier.semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
-            ) { Text(if (fullscreen) "⤡" else "⤢", color = textColor) }
+            ) { PlayerIconView(if (fullscreen) PlayerIcon.ExitFullscreen else PlayerIcon.Fullscreen, textColor) }
         }
     }
-    val videoView: @Composable (Modifier) -> Unit = { m ->
+    // One PlayerView for both layouts: movable content keeps it (and its surface) alive when fullscreen toggles.
+    val videoView = remember(player) { movableContentOf { m: Modifier ->
         Box(m) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
@@ -212,15 +219,16 @@ fun StreamPlayer(
                 }
             }
         }
-    }
+    } }
 
     if (fullscreen) {
         // The video fills the screen; tap it to show or hide the controls laid over the bottom.
         Box(modifier.fillMaxSize().background(Color.Black)) {
             videoView(
-                Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    controlsVisible = !controlsVisible
-                },
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    role = Role.Button, onClickLabel = if (controlsVisible) "Hide controls" else "Show controls",
+                ) { controlsVisible = !controlsVisible },
             )
             if (controlsVisible) {
                 Column(

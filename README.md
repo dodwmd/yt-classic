@@ -177,8 +177,9 @@ player does the same). Expect a second or two of buffering after a seek.
 The key comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
 and `ANDROID_KEY_PASSWORD`; keep a backup of the keystore, because losing it means a new install is needed.
 
-**Fullscreen:** the ⤢ button next to the seek bar plays the video fullscreen in landscape (tap the video to hide the
-controls, Back to leave).
+**Fullscreen:** the corner-brackets button next to the seek bar plays the video fullscreen and hides the system bars. On
+phones it also switches to landscape; Android 16+ ignores orientation requests on large screens (smallest width of
+600dp or more) and in multi-window, so there only the bars are hidden. Tap the video to hide the controls, Back to leave.
 
 **Not in v1:** background audio, picture-in-picture, offline downloads, Play Store publishing.
 

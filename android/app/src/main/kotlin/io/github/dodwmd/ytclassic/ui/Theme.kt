@@ -2,6 +2,8 @@ package io.github.dodwmd.ytclassic.ui
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.SliderColors
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -24,15 +26,19 @@ class ClassicColors(
     val fieldBorder: Color,
     val fieldText: Color,
     val fieldHint: Color,
+    val sliderActive: Color,
+    val sliderInactive: Color,
 )
 
 private val LightClassic = ClassicColors(
     masthead = Color(0xFFE8E8E8), link = Color(0xFF0033CC), muted = Color(0xFF666666), logoText = Color(0xFF333333),
     fieldBackground = Color.White, fieldBorder = Color(0xFFBBBBBB), fieldText = Color(0xFF222222), fieldHint = Color(0xFF888888),
+    sliderActive = LogoRed, sliderInactive = Color(0xFF9A9A9A),
 )
 private val DarkClassic = ClassicColors(
     masthead = Color(0xFF242424), link = Color(0xFF78AAFF), muted = Color(0xFFA8A8A8), logoText = Color(0xFFE4E4E4),
     fieldBackground = Color(0xFF121212), fieldBorder = Color(0xFF555555), fieldText = Color(0xFFE4E4E4), fieldHint = Color(0xFF999999),
+    sliderActive = Color(0xFFFF6B6B), sliderInactive = Color(0xFF8C8C8C),
 )
 
 private val LocalClassic = staticCompositionLocalOf { LightClassic }
@@ -65,6 +71,13 @@ private val DarkScheme = darkColorScheme(
     secondaryContainer = Color(0xFF3A2A2A),
     onSecondaryContainer = Color(0xFFE4E4E4),
 )
+
+/** Seek bar colours. Over the fullscreen video (always dark) the dark-theme set is used in both themes. */
+@Composable
+fun classicSliderColors(overVideo: Boolean = false): SliderColors {
+    val c = if (overVideo) DarkClassic else Classic
+    return SliderDefaults.colors(thumbColor = c.sliderActive, activeTrackColor = c.sliderActive, inactiveTrackColor = c.sliderInactive)
+}
 
 @Composable
 fun ClassicTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {

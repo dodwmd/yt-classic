@@ -24,6 +24,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -53,7 +54,9 @@ import kotlinx.coroutines.flow.first
 fun AppNav(app: App) {
     val nav = rememberNavController()
     var query by rememberSaveable { mutableStateOf("") }
-    var fullscreen by rememberSaveable { mutableStateOf(false) } // the player is fullscreen: no masthead
+    // The player is fullscreen: no masthead. Deliberately not saved: only a composed player enforces it, so after
+    // process death a restored `true` would leave loading/error screens without bars or a way out.
+    var fullscreen by remember { mutableStateOf(false) }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // Searching (or navigating) should put the keyboard away, otherwise it covers the results.
