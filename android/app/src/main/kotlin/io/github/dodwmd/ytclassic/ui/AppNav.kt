@@ -30,6 +30,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.contentDescription
@@ -106,23 +107,24 @@ private fun Masthead(query: String, onQuery: (String) -> Unit, onHome: () -> Uni
             Modifier.clickable(onClick = onHome, role = Role.Button, onClickLabel = "Home").semantics { contentDescription = "YouTube home" },
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text("You", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color(0xFF333333))
+            Text("You", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Classic.logoText)
             Text("Tube", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Color.White, modifier = Modifier.background(LogoRed, shape).padding(horizontal = 4.dp))
         }
         BasicTextField(
             value = query, onValueChange = onQuery, singleLine = true,
-            textStyle = TextStyle(fontSize = 15.sp),
+            textStyle = TextStyle(fontSize = 15.sp, color = Classic.fieldText),
+            cursorBrush = SolidColor(Classic.fieldText),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-            modifier = Modifier.weight(1f).heightIn(min = 38.dp).background(Color.White, shape).border(1.dp, Color(0xFFBBBBBB), shape)
+            modifier = Modifier.weight(1f).heightIn(min = 38.dp).background(Classic.fieldBackground, shape).border(1.dp, Classic.fieldBorder, shape)
                 .padding(horizontal = 10.dp, vertical = 9.dp).semantics { contentDescription = "Search" },
             decorationBox = { inner ->
-                if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = Color(0xFF888888))
+                if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = Classic.fieldHint)
                 inner()
             },
         )
         TextButton(onClick = onSettings, modifier = Modifier.semantics { contentDescription = "Settings" }) {
-            Text("⚙", fontSize = 20.sp, color = Color(0xFF333333))
+            Text("⚙", fontSize = 20.sp, color = Classic.logoText)
         }
     }
 }
