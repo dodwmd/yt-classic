@@ -35,6 +35,54 @@ jobs:
       - name: Unit and integration tests
         run: npm test
 
+  changes:
+    name: Detect changed areas
+    runs-on: ubuntu-latest
+    outputs:
+      android: ${{ steps.filter.outputs.android }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: filter
+        # The Android build is slow, so only run it when the app (or this workflow) changed. A job skipped like this
+        # reports as skipped, which counts as passing for branch protection.
+        run: |
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}" "${{ github.event.pull_request.head.sha }}" | grep -qE '^(android/|\.github/workflows/ci\.yml)'; then
+            echo "android=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "android=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  android:
+    name: Android build and tests
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          gradle-home-cache-cleanup: true
+      - name: Accept SDK licenses (the runner's SDK is writable, so Gradle can fetch what's missing)
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+      - name: Unit tests, lint and debug APK
+        run: ./gradlew --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+      - name: Keep the APK (sideload it with adb install)
+        uses: actions/upload-artifact@v7
+        with:
+          name: yt-classic-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
+
   frontend:
     name: Frontend lint, tests and JS budget
     runs-on: ubuntu-latest

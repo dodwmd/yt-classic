@@ -1,0 +1,44 @@
+{
+  "channel": {
+    "id": "UCsBjURrPoezykLs9EqgamOA",
+    "title": "Fireship",
+    "description": "High-intensity ⚡ code tutorials and tech news to help you ship your app faster. New videos every week covering the topics every programmer should know. \n\nThe original home of #100SecondsOfCode #TheCod",
+    "thumb": "https://yt3.ggpht.com/3fPNbkf_xPyCleq77ZhcxyeorY97NtMHVNUbaAON_RBDH9ydL4hJkjxC8x_4mpuopkB8oI7Ct6Y=s88-c-k-c0x00ffffff-no-rj",
+    "banner": "https://yt3.googleusercontent.com/B5iaLfhJJ65Gh20ZsOaXJZ6eeKCoLzoU-rtFQcYncWSs_j5SFYi5p80kChpSnX6xO54to0q4EXo",
+    "subscribers": "4320000",
+    "videoCount": "859"
+  },
+  "page": {
+    "items": [
+      {
+        "id": "nEaJMdM1djM",
+        "title": "Did the AI bubble just pop?",
+        "channelId": "UCsBjURrPoezykLs9EqgamOA",
+        "channelTitle": "Fireship",
+        "description": "Try Hyperagent for free, or sign in with ChatGPT to get more usage from your existing plan: https://www.hyperagent.com/login?utm_source=youtube&utm_medium=influencer&utm_campaign=FIRESHIP\n\nAre we cooked chat?\n\nWant more Fireship?\n\n🗞️ Newsletter: https://bytes.dev\n🧠 Courses: https://fireship.dev",
+        "publishedAt": "2026-10-28T13:31:29Z",
+        "thumb": "https://i.ytimg.com/vi/nEaJMdM1djM/mqdefault.jpg"
+      },
+      {
+        "id": "G_em1hHPnXY",
+        "title": "China just dropped a new frontier model... and nobody can explain how",
+        "channelId": "UCsBjURrPoezykLs9EqgamOA",
+        "channelTitle": "Fireship",
+        "description": "Get 20% off Mobbin Pro to help your agent design UIs that actually convert - https://mobbin.com/fireship\n\nKimi K3.1 just dropped as a free 3-trillion-parameter open-weight model that comes within one point of Opus on Terminal Bench. But is it *actually* good? Let's find out.\n\nWant more Fireship?\n\n🗞️ Newsletter: https://bytes.dev\n🧠 Courses: https://fireship.dev",
+        "publishedAt": "2026-10-26T18:55:29Z",
+        "thumb": "https://i.ytimg.com/vi/G_em1hHPnXY/mqdefault.jpg"
+      },
+      {
+        "id": "SMGg7iisHmc",
+        "title": "The most vulnerable week in internet history...",
+        "channelId": "UCsBjURrPoezykLs9EqgamOA",
+        "channelTitle": "Fireship",
+        "description": "Semgrep Guardian catches the risky code and packages your agent introduces. Try it free for 60 days: https://semgrep.dev/onboarding/guardian?offer=fireship_202610&utm_source=fireship&utm_medium=referral&utm_campaign=2026-10_fireship_guardian_campaign\n\nPHP2Shell, a backdoored Python package with 23 million weekly downloads, a GitLab bug dating back to 2014, rogue AI agents inside bank accounts, and a certificate authority generating HTTPS keys from numbers under 256 — let's break down the craziest week in the history of the internet.\n\nWant more Fireship?\n\n🗞️ Newsletter: https://bytes.dev\n🧠 Courses: https://fireship.dev",
+        "publishedAt": "2026-10-23T18:19:58Z",
+        "thumb": "https://i.ytimg.com/vi/SMGg7iisHmc/mqdefault.jpg"
+      }
+    ],
+    "nextPageToken": "PAGE_TOKEN"
+  },
+  "subscribed": false
+}
