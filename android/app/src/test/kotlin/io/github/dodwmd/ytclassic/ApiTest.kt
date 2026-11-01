@@ -21,6 +21,7 @@ class ApiTest {
     private lateinit var server: HttpServer
     private val requests = mutableListOf<String>()
     private var lastBody = ""
+    private var importReply: Pair<Int, String>? = null // overrides the import and export answers for the error-path tests
     private lateinit var api: YtApi
 
     private fun fixture(name: String) = javaClass.getResource("/$name.json")!!.readText()
@@ -30,7 +31,8 @@ class ApiTest {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         server.createContext("/") { ex ->
             requests += "${ex.requestMethod} ${ex.requestURI}"
-            lastBody = ex.requestBody.readBytes().decodeToString()
+            val raw = ex.requestBody.readBytes()
+            lastBody = raw.decodeToString()
             val path = ex.requestURI.path
             val (status, body) = when {
                 path == "/healthz" -> 200 to "ok"
@@ -46,6 +48,11 @@ class ApiTest {
                 path.startsWith("/api/history/") -> 200 to """{"removed":true}"""
                 path == "/api/subscribe" -> 200 to """{"subscribed":true}"""
                 path == "/api/unsubscribe" -> 200 to """{"subscribed":false}"""
+                path == "/api/subscriptions/import" && ex.requestMethod == "POST" -> {
+                    requests += "body=" + raw.joinToString(",") + " type=" + ex.requestHeaders.getFirst("Content-Type")
+                    importReply ?: (200 to fixture("import"))
+                }
+                path == "/api/subscriptions/export" -> importReply ?: (200 to "Channel ID,Channel URL,Channel title\r\n")
                 path == "/api/html" -> 200 to "<html>not json</html>"
                 else -> 404 to """{"error":"not found"}"""
             }
@@ -208,5 +215,58 @@ class ApiTest {
     @Test
     fun reportingToAnUnreachableServerThrowsApiExceptionForTheCallerToIgnore() {
         assertFailsWith<ApiException> { runBlocking { YtApi(server = { "127.0.0.1:1" }).reportProgress("dQw4w9WgXcQ", 10) } }
+    }
+
+    // The import fixture is hand-written in the backend's documented response shape (not a captured response).
+    @Test
+    fun importPostsTheRawBytesAndParsesTheSummary() = runBlocking {
+        val bytes = byteArrayOf(0x43, 0xe9.toByte(), 0x0a) // not valid UTF-8: must arrive unchanged
+        val r = api.importSubscriptions(bytes)
+        assertEquals(7, r.added)
+        assertEquals(3, r.skipped.handles)
+        assertEquals("POST /api/subscriptions/import", requests.first { it.startsWith("POST") })
+        assertEquals("body=67,-23,10 type=text/plain", requests.last())
+    }
+
+    @Test
+    fun exportFetchesTheFormat() = runBlocking {
+        assertEquals("Channel ID,Channel URL,Channel title\r\n", api.exportSubscriptions("csv"))
+        assertEquals("GET /api/subscriptions/export?format=csv", requests.last())
+    }
+
+    @Test
+    fun importErrorsCarryTheServersMessage() = runBlocking {
+        importReply = 400 to """{"error":"No subscriptions found. Use a Google Takeout subscriptions.csv, an OPML file, or a list of channel URLs."}"""
+        assertEquals("No subscriptions found. Use a Google Takeout subscriptions.csv, an OPML file, or a list of channel URLs.", assertFailsWith<ApiException> { api.importSubscriptions(ByteArray(1)) }.message)
+        importReply = 413 to """{"error":"File too large (limit 1 MB)."}"""
+        assertEquals("File too large (limit 1 MB).", assertFailsWith<ApiException> { api.importSubscriptions(ByteArray(1)) }.message)
+        importReply = 400 to """{"error":"That file is not valid UTF-8 or UTF-16 text."}"""
+        assertEquals("That file is not valid UTF-8 or UTF-16 text.", assertFailsWith<ApiException> { api.importSubscriptions(ByteArray(1)) }.message)
+    }
+
+    @Test
+    fun importWithAProxyErrorOrJunkGivesAGenericMessage() = runBlocking {
+        importReply = 502 to "<html>Bad Gateway</html>"
+        assertEquals("Request failed (502)", assertFailsWith<ApiException> { api.importSubscriptions(ByteArray(1)) }.message)
+        importReply = 200 to "<html>not json</html>"
+        assertEquals("Unexpected response from the server.", assertFailsWith<ApiException> { api.importSubscriptions(ByteArray(1)) }.message)
+    }
+
+    @Test
+    fun exportErrorsAreReportedNotWrittenAsFileContent() = runBlocking {
+        importReply = 400 to """{"error":"format must be csv or opml"}"""
+        assertEquals("format must be csv or opml", assertFailsWith<ApiException> { api.exportSubscriptions("zip") }.message)
+        importReply = 502 to "<html>Bad Gateway</html>"
+        assertEquals("Request failed (502)", assertFailsWith<ApiException> { api.exportSubscriptions("csv") }.message)
+    }
+
+    @Test
+    fun importAndExportWhileOfflineSayTheServerCannotBeReached() = runBlocking {
+        val port = server.address.port
+        server.stop(0)
+        val offline = YtApi(server = { "127.0.0.1:$port" })
+        assertTrue(assertFailsWith<ApiException> { offline.importSubscriptions(ByteArray(1)) }.message!!.startsWith("Can't reach the server"))
+        assertTrue(assertFailsWith<ApiException> { offline.exportSubscriptions("opml") }.message!!.startsWith("Can't reach the server"))
+        server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0).also { it.start() } // so @AfterTest has something to stop
     }
 }

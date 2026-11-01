@@ -133,5 +133,12 @@ data class ChannelResponse(val channel: Channel, val page: SearchPage = SearchPa
 @Serializable
 data class SubscribeResponse(val subscribed: Boolean)
 
+/** Result of POST /api/subscriptions/import; [total] is the subscription count after the import. */
+@Serializable
+data class ImportResult(val added: Int = 0, val existing: Int = 0, val skipped: ImportSkipped = ImportSkipped(), val total: Int = 0)
+
+@Serializable
+data class ImportSkipped(val invalid: Int = 0, val handles: Int = 0, val full: Int = 0)
+
 @Serializable
 data class ApiError(val error: String = "")

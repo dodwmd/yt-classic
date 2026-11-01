@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Import / export subscriptions - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<link rel="icon" href="/static/img/favicon.svg" type="image/svg+xml">
+<script type="module" src="/static/js/subscriptions.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to import.</p></noscript>
+  <h1>Import / export subscriptions</h1>
+  <form id="import">
+    <h3>Import</h3>
+    <p class="hint">A Google Takeout <code>subscriptions.csv</code> (Google Takeout &gt; YouTube &gt; subscriptions), an OPML file, or a list of
+      channel links, one per line. <code>@handle</code> links can't be resolved and are skipped.</p>
+    <p class="hint">If you choose a file, it is used instead of the pasted text. Files up to 1 MB.</p>
+    <p><label>File <input type="file" id="file" accept=".csv,.opml,.xml,.txt,text/*"></label></p>
+    <p><label for="paste">Or paste channel links</label><br>
+      <textarea id="paste" rows="8" placeholder="https://www.youtube.com/channel/UC..."></textarea></p>
+    <p><button type="submit" id="go">Import</button></p>
+    <p id="result" role="status"></p>
+  </form>
+  <h3>Export</h3>
+  <p><a href="/api/subscriptions/export?format=csv" download>Download CSV</a> &middot;
+    <a href="/api/subscriptions/export?format=opml" download>Download OPML</a></p>
+  <p><a href="/">Back to your subscriptions</a></p>
+</div>
+</body>
+</html>

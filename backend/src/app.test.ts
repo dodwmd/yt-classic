@@ -81,7 +81,7 @@ beforeEach(() => {
   process.env.FFMPEG_BIN = join(tmp, "ffmpeg");
 });
 
-function get(path: string, opts: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+function get(path: string, opts: { method?: string; headers?: Record<string, string>; body?: string | Buffer } = {}) {
   return new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path, method: opts.method ?? "GET", headers: opts.headers }, (res) => {
       let body = "";
@@ -122,7 +122,7 @@ test("search returns JSON with raw (unescaped) data; escaping is the frontend's 
 });
 
 test("the dev server serves the frontend pages and assets", async () => {
-  for (const path of ["/", "/results", "/watch", "/channel/" + CHANNEL]) {
+  for (const path of ["/", "/results", "/watch", "/subscriptions", "/channel/" + CHANNEL]) {
     const r = await get(path);
     assert.equal(r.status, 200, path);
     assert.ok(r.body.includes("<!doctype html>"), path);
@@ -292,4 +292,114 @@ test("video and home expose progress / continue; watched lookup", async () => {
   await post("/api/progress", `id=${VID}&position=600&finished=1`);
   assert.deepEqual(JSON.parse((await get(`/api/history/watched?ids=${VID},bad`)).body).ids, [VID]);
   assert.deepEqual(JSON.parse((await get("/api/home")).body).continue, []);
+});
+
+const A = "UC" + "1".repeat(22), B = "UC" + "2".repeat(22);
+// The response also carries a human-readable `message`; most tests compare only the counts.
+const counts = (body: string) => {
+  const { message, ...rest } = JSON.parse(body);
+  assert.equal(typeof message, "string");
+  return rest;
+};
+const importPost = (body: string | Buffer, headers: Record<string, string> = {}) =>
+  get("/api/subscriptions/import", { method: "POST", body, headers: { "content-type": "text/plain", ...headers } });
+const subIds = async () => (JSON.parse((await get("/api/home")).body).subs as { id: string }[]).map((s) => s.id);
+
+test("import: CSV, response shape, then re-import reports existing; handles and junk are counted", async () => {
+  const csv = `\uFEFFChannel ID,Channel URL,Channel title\r\n${A},http://www.youtube.com/channel/${A},"One, the first"\r\n${B},,Two\r\n,https://www.youtube.com/@h,H\r\nbad,,X\r\n`;
+  const r = await importPost(csv);
+  assert.equal(r.status, 200);
+  assert.deepEqual(counts(r.body), { added: 2, existing: 0, skipped: { invalid: 1, handles: 1, full: 0 }, total: 2 });
+  assert.equal(JSON.parse(r.body).message, "Added 2, 0 already subscribed. Skipped 1 invalid, 1 @handle (can't be resolved). You now have 2 subscriptions.");
+  assert.deepEqual(await subIds(), [A, B]);
+  assert.deepEqual(counts((await importPost(`${A}\n${B}\n`)).body), { added: 0, existing: 2, skipped: { invalid: 0, handles: 0, full: 0 }, total: 2 });
+  for (const id of [A, B]) await get("/api/unsubscribe", { method: "POST", body: `id=${id}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+});
+
+test("import: size cap gives 413 and imports nothing; an empty or unrecognisable body gives 400", async () => {
+  const line = `https://www.youtube.com/channel/${A}\n`;
+  const big = await importPost(line.repeat(Math.ceil((1024 * 1024 + 1) / line.length)));
+  assert.equal(big.status, 413);
+  assert.deepEqual(await subIds(), []);
+  assert.equal((await importPost("")).status, 400);
+  assert.equal((await importPost(" \r\n ")).status, 400);
+  assert.equal((await importPost("<opml><body/></opml>")).status, 400);
+});
+
+test("import: cross-site POSTs are refused and change nothing", async () => {
+  assert.equal((await importPost(A, { origin: "http://evil.example" })).status, 403);
+  assert.equal((await importPost(A, { "sec-fetch-site": "cross-site" })).status, 403);
+  assert.deepEqual(await subIds(), []);
+  assert.equal((await importPost(A, { origin: `http://127.0.0.1:${port}` })).status, 200);
+  await get("/api/unsubscribe", { method: "POST", body: `id=${A}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+});
+
+test("import: MAX_SUBS overflow is reported as skipped.full", async () => {
+  const many = Array.from({ length: 503 }, (_, i) => "UC" + String(i).padStart(22, "0")).join("\n");
+  const r = counts((await importPost(many)).body);
+  assert.deepEqual(r, { added: 500, existing: 0, skipped: { invalid: 0, handles: 0, full: 3 }, total: 500 });
+  const csv = (await get("/api/subscriptions/export")).body;
+  assert.equal(csv.trim().split("\r\n").length, 501);
+  const db = (await import("./db.ts")).getDb();
+  db.exec("DELETE FROM subscriptions");
+});
+
+test("export: headers, CSV and OPML downloads that import back to the same list", async () => {
+  await importPost(`Channel ID,Channel URL,Channel title\n${A},,"Tom & ""Jerry"", <3"\n${B},,Plain`);
+  const csv = await get("/api/subscriptions/export?format=csv");
+  assert.equal(csv.status, 200);
+  const opml = await get("/api/subscriptions/export?format=opml");
+  const head = (path: string) => new Promise<Record<string, unknown>>((resolve, reject) => {
+    request({ host: "127.0.0.1", port, path }, (res) => { res.resume(); resolve(res.headers); }).on("error", reject).end();
+  });
+  const h = await head("/api/subscriptions/export?format=opml");
+  assert.equal(h["content-disposition"], 'attachment; filename="subscriptions.opml"');
+  assert.match(String(h["content-type"]), /^text\/x-opml; charset=utf-8/);
+  assert.equal((await head("/api/subscriptions/export"))["content-disposition"], 'attachment; filename="subscriptions.csv"');
+  assert.match(String((await head("/api/subscriptions/export"))["content-type"]), /^text\/csv; charset=utf-8/);
+  assert.equal((await get("/api/subscriptions/export?format=zip")).status, 400);
+
+  const db = (await import("./db.ts")).getDb();
+  for (const exported of [csv.body, opml.body]) {
+    db.exec("DELETE FROM subscriptions");
+    const r = JSON.parse((await importPost(exported)).body);
+    assert.deepEqual([r.added, r.total, r.skipped.invalid], [2, 2, 0]);
+    const titles = (await (await import("./store.ts")).listSubs()).map((s) => s.title);
+    assert.deepEqual(titles, ['Tom & "Jerry", <3', "Plain"]);
+  }
+  db.exec("DELETE FROM subscriptions");
+});
+
+test("import: exactly 1 MiB is accepted, one byte more is 413", async () => {
+  const pad = (n: number) => `${A}\n` + "#".repeat(n - (A.length + 1)); // a list line plus a comment line, n bytes in all
+  const ok = await importPost(pad(1048576));
+  assert.equal(ok.status, 200);
+  assert.equal(JSON.parse(ok.body).added, 1);
+  assert.equal((await importPost(pad(1048577))).status, 413);
+  await get("/api/unsubscribe", { method: "POST", body: `id=${A}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+});
+
+test("import: UTF-16 files are decoded; bytes that are not valid text give a clear 400 and import nothing", async () => {
+  const csv = `Channel ID,Channel URL,Channel title\n${A},,Caf\u00e9\n`;
+  const r = await importPost(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(csv, "utf16le")]));
+  assert.equal(r.status, 200);
+  assert.equal(JSON.parse(r.body).added, 1);
+  const db = (await import("./db.ts")).getDb();
+  assert.equal((db.prepare("SELECT title FROM subscriptions WHERE id = ?").get(A) as { title: string }).title, "Caf\u00e9");
+  db.exec("DELETE FROM subscriptions");
+  const bad = await importPost(Buffer.from([...Buffer.from(`${A}\n`), 0xe9, 0x0a]));
+  assert.equal(bad.status, 400);
+  assert.match(bad.body, /not valid UTF-8 or UTF-16/);
+  assert.deepEqual(await subIds(), []);
+});
+
+test("export: the CSV is formula-safe and still imports back", async () => {
+  await importPost(`Channel ID,Channel URL,Channel title\n${A},,"=1+1"\n`);
+  const csv = (await get("/api/subscriptions/export")).body;
+  assert.ok(csv.includes(",'=1+1"), csv);
+  const db = (await import("./db.ts")).getDb();
+  db.exec("DELETE FROM subscriptions");
+  await importPost(csv);
+  assert.equal((db.prepare("SELECT title FROM subscriptions WHERE id = ?").get(A) as { title: string }).title, "=1+1");
+  db.exec("DELETE FROM subscriptions");
 });

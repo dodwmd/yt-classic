@@ -12,11 +12,14 @@ export const CHANNEL_ID = /^UC[\w-]{22}$/;
 export const MAX_SUBS = 500;
 export const MAX_TITLE = 200;
 
+/** Cut to MAX_TITLE code points (never in the middle of a surrogate pair). */
+export const capTitle = (t: string): string => Array.from(t.slice(0, MAX_TITLE * 2)).slice(0, MAX_TITLE).join("");
+
 const isSub = (s: unknown): s is Subscription =>
   !!s && typeof s === "object" && typeof (s as Subscription).id === "string" && typeof (s as Subscription).title === "string";
 // The id ends up unencoded in the RSS URL, so only well-formed channel ids are ever stored.
 const clean = (s: Subscription): Subscription | null =>
-  CHANNEL_ID.test(s.id) ? { id: s.id, title: s.title.slice(0, MAX_TITLE) } : null;
+  CHANNEL_ID.test(s.id) ? { id: s.id, title: capTitle(s.title) } : null;
 
 /**
  * One-time import of the pre-SQLite subscriptions.json. The file is renamed afterwards; a meta row records the
@@ -89,6 +92,42 @@ export async function addSub(input: Subscription): Promise<"added" | "exists" | 
       result = "added";
     }
     db.exec("COMMIT");
+    return result;
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+export interface BulkResult {
+  added: number;
+  existing: number;
+  /** Not added because the list had reached MAX_SUBS. */
+  full: number;
+  /** Subscriptions after the import. */
+  total: number;
+}
+
+/** Add many subscriptions in one transaction: all or nothing, and the MAX_SUBS check cannot race with other writers. */
+export async function addSubs(inputs: Subscription[]): Promise<BulkResult> {
+  const db = getDb();
+  const result = { added: 0, existing: 0, full: 0, total: 0 };
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    let n = (stmt(db, "SELECT COUNT(*) AS n FROM subscriptions").get() as { n: number }).n;
+    for (const input of inputs) {
+      const sub = clean(input);
+      if (!sub) throw new RangeError("invalid channel id"); // rolls the whole import back
+      if (stmt(db, "SELECT 1 FROM subscriptions WHERE id = ?").get(sub.id)) result.existing++;
+      else if (n >= MAX_SUBS) result.full++;
+      else {
+        stmt(db, "INSERT INTO subscriptions (id, title) VALUES (?, ?)").run(sub.id, sub.title);
+        n++;
+        result.added++;
+      }
+    }
+    db.exec("COMMIT");
+    result.total = n;
     return result;
   } catch (e) {
     db.exec("ROLLBACK");
