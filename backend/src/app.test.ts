@@ -38,7 +38,7 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
   process.env.FFMPEG_BIN = script("ffmpeg", `echo $$ > "$PIDFILE"; printf xxxx; exec sleep 30`);
   // Stub only the YouTube Data API; nothing here touches the network.
   globalThis.fetch = (async (input: string | URL | Request) => {
-    const u = String(input);
+    const u = input instanceof Request ? input.url : String(input);
     if (u.includes("/youtube/v3/channels")) {
       const item = { id: CHANNEL, snippet: { title: "Chan", description: "d", thumbnails: {} }, statistics: {}, brandingSettings: {} };
       return new Response(JSON.stringify({ items: [item] }), { status: 200 });

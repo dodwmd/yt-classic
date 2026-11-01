@@ -129,16 +129,14 @@ Without Nix, install Node 22+, yt-dlp and ffmpeg yourself and run the same comma
 ```bash
 npm run check       # typecheck + lint + tests (what CI runs)
 npm run typecheck   # tsc --noEmit
-npm run lint        # ESLint (typescript-eslint), including no-floating-promises
+npm run lint        # oxlint (type-aware), including no-floating-promises
 npm test            # node:test with fake yt-dlp/ffmpeg binaries and a stubbed API; no network
 ```
 
 Node runs the TypeScript directly (`--experimental-strip-types`), so there is no build step.
 
-Two TypeScript versions are installed on purpose: type checking (`npm run typecheck`) runs on **TypeScript 7**
-(the `typescript-7` alias in `backend/package.json`), while the plain `typescript` 5.x package exists only as
-ESLint's parser, because typescript-eslint does not support TypeScript 7 yet. When it does, drop the alias and the
-Dependabot ignore rule in `.github/dependabot.yml`.
+Type checking uses **TypeScript 7** (`tsc`, the native compiler). Linting uses **oxlint** with its type-aware rules
+(backed by the same native compiler) rather than ESLint, because typescript-eslint does not support TypeScript 7 yet.
 
 `shell.nix` also picks up an optional, git-ignored `shell.local.nix` for personal tools. It is a function from `{ pkgs }` to a list of packages, for example `{ pkgs }: [ pkgs.ripgrep ]`.
 
