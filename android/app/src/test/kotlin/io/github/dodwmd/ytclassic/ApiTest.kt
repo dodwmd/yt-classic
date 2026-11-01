@@ -59,7 +59,6 @@ class ApiTest {
         assertEquals("Fireship", home.subs.single().title)
         assertTrue(home.feed.isNotEmpty())
         assertNull(home.feed.first().views) // fallback feed items have no view count
-        assertTrue(home.recs.all { it.id.isNotEmpty() })
     }
 
     @Test

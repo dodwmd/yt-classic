@@ -78,10 +78,6 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
                 }
                 item { SectionTitle("New from your subscriptions") }
                 items(home.feed, key = { it.id }) { FeedRow(it, onVideo) }
-                if (home.recs.isNotEmpty()) {
-                    item { SectionTitle("Recommended for you") }
-                    items(home.recs, key = { "rec-" + it.id }) { RelatedRow(it, onVideo) }
-                }
             }
         }
     }

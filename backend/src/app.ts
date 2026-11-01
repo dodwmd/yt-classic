@@ -8,7 +8,6 @@ import { CHANNEL_ID, addSub, listSubs, removeSub } from "./store.ts";
 import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
-import { recommendations } from "./recs.ts";
 import { BusyError } from "./limit.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
@@ -48,9 +47,6 @@ function hostAllowed(req: IncomingMessage): boolean {
   return !allowed.length || allowed.includes(req.headers.host ?? "");
 }
 
-const withDeadline = <T>(p: Promise<T>, ms: number, fallback: T): Promise<T> =>
-  Promise.race([p, new Promise<T>((resolve) => setTimeout(() => resolve(fallback), ms).unref())]);
-
 async function readForm(req: IncomingMessage, max = 4096): Promise<URLSearchParams | null> {
   const chunks: Buffer[] = [];
   let size = 0;
@@ -84,8 +80,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/api/home") {
     const subs = await listSubs();
     const feed = await subscriptionFeed(subs);
-    const recs = await withDeadline(recommendations(feed, subs).catch(() => []), 5000, []);
-    return json(res, 200, { subs, feed, recs });
+    return json(res, 200, { subs, feed });
   }
 
   if (path === "/api/search") {

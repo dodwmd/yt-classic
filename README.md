@@ -17,7 +17,7 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
 ## Features
 
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
-  view counts, plus a "Recommended for you" row.
+  view counts.
 - **Search**: classic results list, paged, using yt-dlp (no API quota).
 - **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar.
 - **Channel pages**: banner, uploads grid, Subscribe/Unsubscribe (stored locally, no Google login).
@@ -31,7 +31,7 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
               proxies /api and /stream         ├─ yt-dlp                search + stream URL resolution
                                                ├─ ffmpeg                live remux of video+audio to mp4
                                                ├─ YouTube RSS feeds     subscriptions feed
-                                               └─ YouTube /next         related videos + recommendations
+                                               └─ YouTube /next         related videos
 ```
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
@@ -220,8 +220,8 @@ language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 ## Limitations
 
 - **Seeking** outside the already-buffered part restarts the stream (about 1–2 seconds). There is no seek preview.
-- **Related videos and recommendations** use YouTube's unofficial `/next` endpoint. If it stops working, the watch
-  page falls back to "More from this channel" (1 quota unit); the recommendations row simply disappears.
+- **Related videos** use YouTube's unofficial `/next` endpoint. If it stops working, the watch
+  page falls back to "More from this channel" (1 quota unit).
 - **Search results** have no upload date, because the free yt-dlp search doesn't return one.
 - **Comments, playlists, login, live streams and Shorts-specific pages** are not implemented.
 - Everything depends on yt-dlp keeping up with YouTube. If playback stops working, update yt-dlp first.
@@ -268,7 +268,6 @@ backend/
   src/yt/search.ts       yt-dlp search (Data API fallback)
   src/yt/innertube.ts    related videos from YouTube's /next
   src/yt/rss.ts          channel RSS feeds
-  src/recs.ts            recommendations
   src/store.ts           subscriptions.json
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
