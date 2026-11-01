@@ -1,16 +1,29 @@
 import { formatSeconds } from "./fmt.js";
 
-// Small helpers shared by the pages. Data is only ever put into the DOM with textContent and property
-// assignment, never as HTML strings (a test enforces this).
+// Shared helpers; DOM text only via textContent (a test enforces it).
 
 export const $ = (sel, root = document) => root.querySelector(sel);
 
 export async function api(path, init) {
   const res = await fetch(path, init);
   const body = await res.json().catch(() => ({}));
+  if (res.status === 401) { // the page is going away, so never resolve
+    location.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
+    return new Promise(() => {});
+  }
   if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
   return body;
 }
+
+const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/;
+const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"]]);
+export function destination(next) {
+  const w = WATCH.exec(next), c = CHANNEL.exec(next);
+  return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : PAGES.get(next) || "/";
+}
+
+const login = document.getElementById("login");
+if (login) login.action = "/api/login?next=" + encodeURIComponent(destination(new URLSearchParams(location.search).get("next")));
 
 export const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
 
@@ -25,6 +38,7 @@ export async function run(main) {
   try {
     await main();
     status.hidden = true;
+    fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {
     status.textContent = err.message || String(err);
     status.hidden = false;

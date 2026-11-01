@@ -18,8 +18,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
+import io.github.dodwmd.ytclassic.data.AuthException
 import io.github.dodwmd.ytclassic.data.VideoDetail
 import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
@@ -41,7 +45,15 @@ import kotlinx.coroutines.launch
  */
 @OptIn(UnstableApi::class)
 class PlaybackHost(private val context: Context, private val api: YtApi) {
+    /** The stream's origin and its `Authorization` value; set before each load. Read on ExoPlayer's loader thread. */
+    @Volatile private var streamOrigin: String? = null
+    @Volatile private var streamAuth: String? = null
+
+    private val streamClient = streamClient()
+    private val dataSources = DataSource.Factory { AuthDataSource(streamClient, { streamOrigin }, { streamAuth }) }
+
     private val exo = ExoPlayer.Builder(context)
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources))
         // Take audio focus (pause for calls, duck for prompts, stop other media) and pause when headphones are unplugged.
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         .setHandleAudioBecomingNoisy(true)
@@ -66,6 +78,9 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     var buffering by mutableStateOf(false)
         private set
     var error by mutableStateOf<String?>(null)
+        private set
+    /** The current [error] is the server asking for (or rejecting) the access token: the UI offers Settings. */
+    var needsToken by mutableStateOf(false)
         private set
     var finished by mutableStateOf(false)
         private set
@@ -161,7 +176,9 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             override fun onPlayerError(e: PlaybackException) {
                 if (seek.restarting) return // the old stream failing doesn't matter, it is being replaced
                 buffering = false
-                error = "Couldn't play this video (${e.errorCodeName})."
+                val status = (e.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
+                needsToken = status == 401
+                error = if (needsToken) "Server needs an access token: set it in Settings." else "Couldn't play this video (${e.errorCodeName})."
                 endIfDone()
             }
         })
@@ -214,6 +231,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         pendingPlay = play ?: playIntent
         quality = q
         error = null
+        needsToken = false
         finished = false
         buffering = true
         val start = seek.requestRestart(at)
@@ -223,6 +241,8 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         loading = scope.launch {
             try {
                 val url = api.streamUrl(v.id, q, start, lang)
+                streamOrigin = origin(url)
+                streamAuth = api.streamAuthorization()
                 seek.commitRestart()
                 exo.setMediaItem(item(v, url))
                 exo.prepare()
@@ -232,6 +252,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             } catch (e: Exception) {
                 seek.failRestart()
                 buffering = false
+                needsToken = e is AuthException
                 error = e.message ?: "Couldn't start the stream."
                 endIfDone()
             }

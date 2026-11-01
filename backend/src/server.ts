@@ -1,4 +1,5 @@
 import { createApp } from "./app.ts";
+import { checkAuthConfig } from "./auth.ts";
 import { execFile } from "node:child_process";
 import { killChildren } from "./yt/dlp.ts";
 import { closeDb, getDb } from "./db.ts";
@@ -9,6 +10,17 @@ try {
   getDb();
 } catch (e) {
   console.error(`DATABASE UNAVAILABLE at start-up: ${(e as Error).message}`);
+}
+
+try {
+  if (checkAuthConfig(process.env) === "token") console.log("ACCESS_TOKEN is set: /api and /stream require it.");
+  else {
+    console.log("ACCESS_TOKEN is not set: the API and streams are open to anyone who can reach this port. Keep it on a network you trust.");
+    if (process.env.ACCESS_TOKEN === "") console.warn("WARNING: ACCESS_TOKEN is set but EMPTY, so authentication is OFF. Remove the line or give it a value (set REQUIRE_AUTH=1 to refuse to start like this).");
+  }
+} catch (e) {
+  console.error(`REFUSING TO START: ${(e as Error).message}`);
+  process.exit(1);
 }
 
 const port = Number(process.env.PORT ?? 3000);

@@ -24,7 +24,7 @@ class App : Application() {
         settings = SettingsStore(this)
         // Always read the persisted address (DataStore caches it), so there is no window where a request can run
         // before a mirrored copy has been loaded, and a stale copy can never overwrite a fresh one.
-        api = YtApi(server = { settings.serverUrl.first() })
+        api = YtApi(server = { settings.serverUrl.first() }, token = { settings.accessToken.first() })
         host = PlaybackHost(this, api)
         MainScope().launch { settings.backgroundAudio.collect { host.keepInBackground = it } }
     }

@@ -3,6 +3,8 @@ services:
     build:
       context: ./backend
       dockerfile: Containerfile
+    # Optional shared access token: put ACCESS_TOKEN=... (and optionally REQUIRE_AUTH=1) in backend/.env, which is read
+    # here; see README "Access token". There is deliberately no `environment:` entry so no value lives in this file.
     env_file: ./backend/.env
     # Run as your host user so the bind-mounted ./backend/data is writable (rootless podman).
     user: "1000:1000"

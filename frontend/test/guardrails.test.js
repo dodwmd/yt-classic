@@ -116,3 +116,40 @@ test("compose.yaml bounds the frontend's /tmp tmpfs", () => {
   const compose = readFileSync(new URL("../../compose.yaml", import.meta.url), "utf8");
   assert.match(compose.slice(compose.indexOf("  frontend:")), /tmpfs: \["\/tmp:size=\d+m"\]/);
 });
+
+test("login page: nginx route exists, the form posts to the backend (which validates next), 401 redirects to it", () => {
+  const nginx = readFileSync(new URL("../nginx.conf", import.meta.url), "utf8");
+  assert.match(nginx, /location = \/login\s+\{[^}]*try_files \/login\.html/);
+  assert.match(read("js/lib.js"), /\/api\/login\?next=/);
+  assert.match(read("login.html"), /<form id="login" method="post" action="\/api\/login"[^>]*>[\s\S]*type="password"/);
+  assert.match(read("classic.css"), /#login \.msg:target/);
+  const lib = read("js/lib.js");
+  assert.match(lib, /res\.status === 401[\s\S]*\/login\?next=/);
+  for (const f of htmlFiles.filter((x) => x !== "login.html")) {
+    assert.match(read(f), /<footer id="foot" hidden><form method="post" action="\/api\/logout">/, `${f} needs the Log out footer`);
+  }
+});
+
+test("destination() only ever returns one of the known pages, rebuilt from constants and validated ids", async () => {
+  globalThis.document = { getElementById: () => null }; // lib.js looks up the login form when it loads
+  const { destination } = await import("../public/js/lib.js");
+  const ID = "dQw4w9WgXcQ", UC = "UC" + "a".repeat(22);
+  const hostile = ["//evil.com", "/\\evil.com", "/\t/evil.com", "/\n/evil.com", "/%09/evil.com", "/%0a/evil.com", "javascript:alert(1)", "https://evil.com", "http://evil.com/watch?v=" + ID,
+    "evil.com", "", null, undefined, "x", "/history/../../evil", "/history?x=1", "/watch?v=short", "/watch?v=" + ID.slice(1) + "<", "/watch", "/watch?v=%3Cscript%3E123",
+    "/channel/UC123", "/channel/" + UC + "x", "/channel/" + UC + "/..", "/channel//evil.com", "/results?search_query=" + "a".repeat(201), "/results?search_query=<script>", "/results?search_query=a b", "/results?search_query=a\\b",
+    "/results?search_query=a#//evil.com", "/ ", " /history", "/HISTORY"];
+  for (const h of hostile) assert.equal(destination(h), "/", `${JSON.stringify(h)} must fall back to /`);
+  assert.equal(destination("/"), "/");
+  assert.equal(destination("/history"), "/history");
+  assert.equal(destination("/subscriptions"), "/subscriptions");
+  assert.equal(destination("/constructor"), "/");
+  assert.equal(destination("__proto__"), "/");
+  assert.equal(destination(`/watch?v=${ID}`), `/watch?v=${ID}`);
+  assert.equal(destination(`/watch?v=${ID}&t=5&q=720`), `/watch?v=${ID}`, "extra parameters are dropped, not copied");
+  assert.equal(destination(`/channel/${UC}`), `/channel/${UC}`);
+  assert.equal(destination("/results?search_query=nix+os"), "/", "search pages fall back to the home page");
+  // Through the real query-string decoding that the login page uses (%09 turns into a TAB there).
+  for (const evil of ["/%09/evil.com", "/%0a/evil.com", "//evil.com", "/%5cevil.com"]) assert.equal(destination(new URLSearchParams(`next=${evil}`).get("next")), "/", evil);
+  const out = destination(`/watch?v=${ID}&x=//evil.com`);
+  assert.ok(!out.includes("evil"));
+});

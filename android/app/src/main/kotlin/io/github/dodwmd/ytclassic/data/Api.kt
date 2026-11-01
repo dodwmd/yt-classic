@@ -21,7 +21,22 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** A failure with a message that is fit to show to the user. */
-class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+open class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+
+/** The server wants an access token and the request had none ([tokenSet] false) or a wrong one. */
+class AuthException(val tokenSet: Boolean) : ApiException(
+    if (tokenSet) "The server rejected the access token: check it in Settings." else "Server needs an access token: set it in Settings.",
+)
+
+/** Outcome of the Settings connection test. */
+enum class ServerCheck(val message: String) {
+    Ok("Connected"),
+    Unreachable("Can't reach the server"),
+    NeedsToken("Server needs an access token: enter it below."),
+    TokenRejected("Token rejected: the server did not accept this access token."),
+    TooManyAttempts("Too many failed attempts: wait a few minutes and try again."),
+    Unexpected("The server gave an unexpected response. Is this the YouTube Classic backend?"),
+}
 
 /** "192.168.1.5:8080" -> "http://192.168.1.5:8080"; blank or unparseable -> null. */
 fun normalizeServerUrl(raw: String): HttpUrl? {
@@ -58,6 +73,8 @@ val ApiJson = Json {
 /** Client for the YouTube Classic backend. [server] is read on every call so a settings change applies immediately. */
 class YtApi(
     private val server: suspend () -> String,
+    /** The optional access token; sent as `Authorization: Bearer` to the configured server only. */
+    private val token: suspend () -> String = { "" },
     private val client: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(10, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS) // a cold home page can wait on several upstream fetches
@@ -76,14 +93,14 @@ class YtApi(
 
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         val body = FormBody.Builder().add("id", channelId).build()
-        val req = Request.Builder().url(url(if (subscribe) "api/subscribe" else "api/unsubscribe")).post(body).build()
+        val req = request(url(if (subscribe) "api/subscribe" else "api/unsubscribe")).post(body).build()
         return decode<SubscribeResponse>(execute(req)).subscribed
     }
 
     /** Tells the server where playback is. The caller treats failure as unimportant. */
     suspend fun reportProgress(id: String, positionSeconds: Long, finished: Boolean = false) {
         val body = FormBody.Builder().add("id", id).add("position", positionSeconds.toString()).apply { if (finished) add("finished", "1") }.build()
-        execute(Request.Builder().url(url("api/progress")).post(body).build()).use { }
+        execute(request(url("api/progress")).post(body).build()).use { }
     }
 
     suspend fun history(before: String? = null): HistoryPage = get("api/history", "limit" to "48", "before" to before)
@@ -93,14 +110,15 @@ class YtApi(
         get<WatchedResponse>("api/history/watched", "ids" to ids.take(100).joinToString(",")).ids.toSet()
 
     suspend fun removeFromHistory(id: String) {
-        execute(Request.Builder().url(url("api/history/$id")).delete().build()).use { check(it) }
+        execute(request(url("api/history/$id")).delete().build()).use { check(it) }
     }
 
     suspend fun clearHistory() {
-        execute(Request.Builder().url(url("api/history/clear")).post(FormBody.Builder().build()).build()).use { check(it) }
+        execute(request(url("api/history/clear")).post(FormBody.Builder().build()).build()).use { check(it) }
     }
 
-    private fun check(r: Response) {
+    private suspend fun check(r: Response) {
+        if (r.code == 401) throw AuthException(token().isNotBlank())
         if (!r.isSuccessful) throw ApiException("Request failed (${r.code})")
     }
 
@@ -110,13 +128,14 @@ class YtApi(
      */
     suspend fun importSubscriptions(bytes: ByteArray): ImportResult {
         val body = bytes.toRequestBody("text/plain".toMediaType())
-        return decode(execute(Request.Builder().url(url("api/subscriptions/import")).post(body).build()))
+        return decode(execute(request(url("api/subscriptions/import")).post(body).build()))
     }
 
     /** The whole export file as text; [format] is "csv" or "opml". */
     suspend fun exportSubscriptions(format: String): String = withContext(Dispatchers.IO) {
-        execute(Request.Builder().url(url("api/subscriptions/export", "format" to format)).build()).use {
+        execute(request(url("api/subscriptions/export", "format" to format)).build()).use {
             val text = it.body.string()
+            if (it.code == 401) throw AuthException(token().isNotBlank())
             if (!it.isSuccessful) {
                 val message = runCatching { ApiJson.decodeFromString<ApiError>(text).error }.getOrDefault("")
                 throw ApiException(message.ifBlank { "Request failed (${it.code})" })
@@ -125,12 +144,42 @@ class YtApi(
         }
     }
 
-    /** Checks that the configured server answers; used by the settings screen. */
-    suspend fun ping(): Boolean = try {
-        execute(Request.Builder().url(url("healthz")).build()).use { it.isSuccessful }
-    } catch (_: ApiException) {
-        false
+    /**
+     * Checks that the server answers and whether the token (if any) is accepted; used by the settings screen.
+     * `/healthz` is open; `/api/session` says whether a token is needed. Only a 404 there (a server that predates the
+     * token, so open) or a well-formed session body counts as success; anything else is reported, never as "Connected".
+     */
+    suspend fun check(): ServerCheck {
+        try {
+            if (!execute(Request.Builder().url(url("healthz")).build()).use { it.isSuccessful }) return ServerCheck.Unreachable
+            val session = execute(request(url("api/session")).build())
+            val haveToken = token().isNotBlank()
+            return withContext(Dispatchers.IO) {
+                session.use {
+                    when {
+                        it.code == 404 -> ServerCheck.Ok
+                        it.code == 429 -> ServerCheck.TooManyAttempts
+                        it.code == 401 -> if (haveToken) ServerCheck.TokenRejected else ServerCheck.NeedsToken
+                        !it.isSuccessful -> ServerCheck.Unexpected
+                        else -> {
+                            val s = runCatching { ApiJson.decodeFromString<SessionResponse>(it.body.string()) }.getOrNull()
+                            when {
+                                s == null || s.auth !in setOf("none", "required") -> ServerCheck.Unexpected
+                                s.auth == "none" || s.authenticated -> ServerCheck.Ok
+                                haveToken -> ServerCheck.TokenRejected
+                                else -> ServerCheck.NeedsToken
+                            }
+                        }
+                    }
+                }
+            }
+        } catch (_: ApiException) {
+            return ServerCheck.Unreachable
+        }
     }
+
+    /** The `Authorization` value for the stream, or null when no token is set. Only valid for the host of [streamUrl]. */
+    suspend fun streamAuthorization(): String? = token().trim().takeIf { it.isNotEmpty() }?.let { "Bearer $it" }
 
     /** The live stream; [startSeconds] restarts it at that offset (the backend remuxes on the fly, so seeking = restarting). */
     suspend fun streamUrl(id: String, quality: Int, startSeconds: Long = 0, lang: String = ""): String =
@@ -143,13 +192,21 @@ class YtApi(
         }.build()
     }
 
+    /** Every API request is built here, so the token only ever goes to the configured server. */
+    private suspend fun request(url: HttpUrl): Request.Builder {
+        val b = Request.Builder().url(url)
+        token().trim().takeIf { it.isNotEmpty() }?.let { b.header("Authorization", "Bearer $it") }
+        return b
+    }
+
     private suspend inline fun <reified T> get(path: String, vararg query: Pair<String, String?>): T =
-        decode(execute(Request.Builder().url(url(path, *query)).build()))
+        decode(execute(request(url(path, *query)).build()))
 
     // Reading the body is blocking I/O: it must not run on the main thread (the caller's dispatcher in the UI).
     private suspend inline fun <reified T> decode(response: Response): T = withContext(Dispatchers.IO) {
       response.use {
         val text = it.body.string()
+        if (it.code == 401) throw AuthException(token().isNotBlank())
         if (!it.isSuccessful) {
             val message = runCatching { ApiJson.decodeFromString<ApiError>(text).error }.getOrDefault("")
             throw ApiException(message.ifBlank { "Request failed (${it.code})" })

@@ -148,8 +148,8 @@ class ApiTest {
 
     @Test
     fun pingReportsHealth() = runBlocking {
-        assertTrue(api.ping())
-        assertFalse(YtApi(server = { "127.0.0.1:1" }).ping())
+        assertEquals(io.github.dodwmd.ytclassic.data.ServerCheck.Ok, api.check())
+        assertEquals(io.github.dodwmd.ytclassic.data.ServerCheck.Unreachable, YtApi(server = { "127.0.0.1:1" }).check())
     }
 
     @Test
