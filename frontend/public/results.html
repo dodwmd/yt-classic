@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Search - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<script type="module" src="/static/js/results.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to load its data.</p></noscript>
+  <p id="status" role="status">Loading&hellip;</p>
+  <h2 id="heading" hidden></h2>
+  <p id="none" hidden>No results.</p>
+  <div id="results"></div>
+  <nav class="pager" aria-label="Pagination"><a id="prev" hidden>&laquo; Previous</a> <a id="next" hidden>Next &raquo;</a></nav>
+</div>
+<template id="t-result">
+  <div class="result">
+    <a class="thumb"><img width="160" height="90" alt=""><span class="dur" hidden></span></a>
+    <div class="meta">
+      <a class="title"></a>
+      <div class="sub">by <a class="chan"></a><span class="extra"></span></div>
+      <div class="desc"></div>
+    </div>
+  </div>
+</template>
+</body>
+</html>

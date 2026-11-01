@@ -1,0 +1,17 @@
+{
+  "name": "yt-classic-frontend",
+  "private": true,
+  "type": "module",
+  "license": "0BSD",
+  "engines": {
+    "node": ">=22.9"
+  },
+  "scripts": {
+    "lint": "oxlint public test",
+    "test": "node --test \"test/*.test.js\"",
+    "check": "npm run lint && npm test"
+  },
+  "devDependencies": {
+    "oxlint": "^1.90.0"
+  }
+}

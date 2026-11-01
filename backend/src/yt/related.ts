@@ -1,6 +1,5 @@
 import { channelUploads, type VideoDetail } from "./api.ts";
 import { related, type RelatedItem } from "./innertube.ts";
-import { timeAgo } from "../format.ts";
 
 export interface RelatedList {
   heading: string;
@@ -14,6 +13,6 @@ export async function relatedFor(v: VideoDetail): Promise<RelatedList> {
   const ups = await channelUploads(v.channelId, v.id).catch(() => []);
   return {
     heading: `More from ${v.channelTitle}`,
-    items: ups.map((u) => ({ id: u.id, title: u.title, channelTitle: v.channelTitle, age: timeAgo(u.publishedAt), thumb: u.thumb })),
+    items: ups.map((u) => ({ id: u.id, title: u.title, channelTitle: v.channelTitle, publishedAt: u.publishedAt, thumb: u.thumb })),
   };
 }

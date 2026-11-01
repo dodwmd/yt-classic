@@ -84,34 +84,47 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 test("basic routing and validation", async () => {
   assert.equal((await get("/healthz")).status, 200);
   assert.equal((await get("/nope")).status, 404);
-  assert.equal((await get("/watch?v=bad")).status, 400);
-  assert.equal((await get("/channel/bad")).status, 400);
+  assert.equal((await get("/api/video/bad")).status, 400);
+  assert.equal((await get("/api/channel/bad")).status, 400);
   assert.equal((await get("/stream/bad")).status, 400);
-  assert.equal((await get("/results?search_query=" + "x".repeat(300))).status, 400);
-  assert.equal((await get("/results?search_query=")).status, 302);
+  assert.equal((await get("/api/search?q=" + "x".repeat(300))).status, 400);
+  assert.equal((await get("/api/search?q=")).status, 400);
+  assert.equal((await get("/api/nope")).status, 404);
 });
 
-test("search results are HTML-escaped and script-free", async () => {
-  const r = await get("/results?search_query=nix");
+test("search returns JSON with raw (unescaped) data; escaping is the frontend's job", async () => {
+  const r = await get("/api/search?q=nix");
   assert.equal(r.status, 200);
-  assert.ok(r.body.includes("&lt;script&gt;alert(1)&lt;/script&gt;"));
-  assert.ok(!r.body.includes("<script"));
+  const page = JSON.parse(r.body);
+  assert.equal(page.items[0].title, "<script>alert(1)</script>");
+  assert.equal(page.items[0].durationSeconds, 65);
+});
+
+test("the dev server serves the frontend pages and assets", async () => {
+  for (const path of ["/", "/results", "/watch", "/channel/" + CHANNEL]) {
+    const r = await get(path);
+    assert.equal(r.status, 200, path);
+    assert.ok(r.body.includes("<!doctype html>"), path);
+  }
+  assert.equal((await get("/static/classic.css")).status, 200);
+  assert.equal((await get("/static/js/lib.js")).status, 200);
+  assert.equal((await get("/static/../../backend/package.json")).status, 404);
 });
 
 test("host allow-list rejects unknown hosts", async () => {
   process.env.ALLOWED_HOSTS = "good.example";
-  assert.equal((await get("/")).status, 421);
+  assert.equal((await get("/api/home")).status, 421);
   assert.equal((await get("/healthz")).status, 200);
 });
 
 test("cross-site POSTs are refused, same-origin and non-browser ones work", async () => {
   const body = `id=${CHANNEL}`;
   const form = { "content-type": "application/x-www-form-urlencoded" };
-  assert.equal((await get("/subscribe", { method: "POST", body, headers: { ...form, origin: "http://evil.example" } })).status, 403);
-  assert.equal((await get("/subscribe", { method: "POST", body, headers: { ...form, "sec-fetch-site": "cross-site" } })).status, 403);
-  assert.equal((await get("/subscribe", { method: "POST", body, headers: { ...form, origin: `http://127.0.0.1:${port}` } })).status, 303);
-  assert.equal((await get("/unsubscribe", { method: "POST", body, headers: form })).status, 303); // curl-style: no Origin
-  assert.equal((await get("/subscribe", { method: "POST", body: "id=nope", headers: form })).status, 400);
+  assert.equal((await get("/api/subscribe", { method: "POST", body, headers: { ...form, origin: "http://evil.example" } })).status, 403);
+  assert.equal((await get("/api/subscribe", { method: "POST", body, headers: { ...form, "sec-fetch-site": "cross-site" } })).status, 403);
+  assert.equal((await get("/api/subscribe", { method: "POST", body, headers: { ...form, origin: `http://127.0.0.1:${port}` } })).status, 200);
+  assert.equal((await get("/api/unsubscribe", { method: "POST", body, headers: form })).status, 200); // curl-style: no Origin
+  assert.equal((await get("/api/subscribe", { method: "POST", body: "id=nope", headers: form })).status, 400);
 });
 
 test("a missing ffmpeg gives a 502 and does not crash the server", async () => {

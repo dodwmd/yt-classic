@@ -1,8 +1,10 @@
 # YouTube Classic
 
 A personal, self-hosted YouTube frontend that recreates the look of "classic" YouTube (roughly 2009–2012) and
-ships **almost no JavaScript**. Pages are rendered on the server as plain HTML. The only script is a small seek bar
-(`frontend/public/player.js`) on the watch page; every other page has none.
+keeps its JavaScript **small and purposeful**. All the HTML lives in `frontend/` as plain pages with `<template>`
+blocks; a few hundred lines of vanilla JS (about 6 KB gzipped in total) fetch JSON from the backend and fill those
+templates in. No framework, no bundler, no third-party scripts, no tracking. The JS size and safety rules are
+enforced by tests (see [CI/CD](#cicd)).
 
 Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
@@ -24,15 +26,18 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
 ```
 browser ──► nginx (frontend container) ──► Node/TypeScript backend (backend container)
-              serves /static/*                 ├─ YouTube Data API v3   video + channel metadata
-              proxies everything else          ├─ yt-dlp                search + stream URL resolution
+              static HTML/CSS/JS               ├─ YouTube Data API v3   video + channel metadata
+              proxies /api and /stream         ├─ yt-dlp                search + stream URL resolution
                                                ├─ ffmpeg                live remux of video+audio to mp4
                                                ├─ YouTube RSS feeds     subscriptions feed
                                                └─ YouTube /next         related videos + recommendations
 ```
 
-- **`backend/`** renders every HTML page (plain template literals, no framework) and streams video.
-- **`frontend/`** is static CSS/JS, served by nginx, which also reverse-proxies all other requests to the backend.
+- **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
+  unsubscribe) plus the video stream (`/stream/:id`). It contains no HTML.
+- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, the CSS,
+  and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
+  Data is put into pages with `textContent` and property assignment only, never as HTML strings.
 - **Playback:** YouTube no longer offers a single file with audio and video together, so the backend takes the
   separate video and audio streams and has ffmpeg combine them *on the fly* into fragmented mp4. Nothing is
   downloaded or cached, and playback starts in a couple of seconds. Because a live stream has no fixed length, the
@@ -124,10 +129,10 @@ npm run dev              # http://localhost:3000, restarts on changes
 ```
 
 Without Nix, install Node 22+, yt-dlp and ffmpeg yourself and run the same commands. In dev, the backend also serves
-`frontend/public/` at `/static/`, so you don't need nginx.
+`frontend/public/` (pages at `/`, `/results`, `/watch`, `/channel/<id>`, assets at `/static/`), so you don't need nginx.
 
 ```bash
-npm run check       # typecheck + lint + tests (what CI runs)
+npm run check       # typecheck + lint + tests (what CI runs); the frontend has its own: cd ../frontend && npm run check
 npm run typecheck   # tsc --noEmit
 npm run lint        # oxlint (type-aware), including no-floating-promises
 npm test            # node:test with fake yt-dlp/ffmpeg binaries and a stubbed API; no network
@@ -184,16 +189,20 @@ language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 
 GitHub Actions, in `.github/workflows/`:
 
-- **`ci.yml`** runs on **pull requests to `main` only** (not on pushes to `main`). Jobs: lint + typecheck + tests;
-  CodeQL static analysis; security (gitleaks over the full history, `npm audit`, dependency review, hadolint on the
-  Containerfiles); and `docker compose build`.
+- **`ci.yml`** runs on **pull requests to `main` only** (not on pushes to `main`). Jobs:
+  - backend lint + typecheck + tests;
+  - frontend lint + tests, including the **JS guardrails**: a size budget on the shipped JavaScript (8 KB gzipped),
+    no HTML-injection or dynamic-code sinks, same-origin module scripts only, and a check that every element a page
+    script looks up exists in its HTML;
+  - CodeQL static analysis;
+  - security: gitleaks over the full history, `npm audit`, dependency review, hadolint on the Containerfiles;
+  - `docker compose build`.
 - **`cd.yml`** is a placeholder (manual trigger, does nothing). There is no deployment target yet.
-- Dependabot proposes weekly updates for npm packages and the actions themselves.
+- Dependabot proposes weekly updates for the backend and frontend npm packages and for the actions themselves.
 
-Run the same checks locally (lint, types, tests) with `nix-shell --run 'cd backend && npm run check'`.
+Run the same checks locally with `nix-shell --run 'cd backend && npm run check && cd ../frontend && npm run check'`.
 
-Because CI only runs on pull requests, changes pushed straight to `main` are not checked. To make the checks
-binding, protect `main` (Settings → Branches → require a pull request and the CI jobs to pass).
+`main` is protected: changes go through a pull request, and the CI jobs must pass before merging.
 
 ## Project layout
 
@@ -207,11 +216,12 @@ backend/
   src/yt/rss.ts          channel RSS feeds
   src/recs.ts            recommendations
   src/store.ts           subscriptions.json
-  src/views/*.ts         HTML templates
 frontend/
+  public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look
-  public/player.js       the seek bar (watch page only)
-  nginx.conf             static files + reverse proxy
+  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
+  test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
+  nginx.conf             page routes, security headers, reverse proxy for /api and /stream
 compose.yaml             runs both containers
 shell.nix                dev shell
 ```

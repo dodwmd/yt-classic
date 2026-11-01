@@ -1,7 +1,6 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { cached } from "../cache.ts";
-import { formatSeconds } from "../format.ts";
 import { apiSearch, type SearchPage, type VideoSummary } from "./api.ts";
 import { resolveSlots } from "./dlp.ts";
 
@@ -20,7 +19,7 @@ export function parseSearch(json: any, page: number): SearchPage {
     description: e.description ?? "",
     publishedAt: "", // flat search results carry no publish date
     thumb: `https://i.ytimg.com/vi/${e.id}/mqdefault.jpg`,
-    durationLabel: typeof e.duration === "number" ? formatSeconds(e.duration) : undefined,
+    durationSeconds: typeof e.duration === "number" ? e.duration : undefined,
     views: e.view_count != null ? String(e.view_count) : undefined,
   }));
   return {

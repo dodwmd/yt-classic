@@ -7,6 +7,7 @@ export interface RelatedItem {
   channelTitle: string;
   views?: string; // display string, e.g. "1.2M"
   age?: string; // display string, e.g. "2mo ago"
+  publishedAt?: string; // ISO date, only for the channel-uploads fallback (no display string available)
   duration?: string; // display string, e.g. "13:42"
   thumb: string;
 }

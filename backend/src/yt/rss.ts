@@ -1,5 +1,6 @@
 import { cached } from "../cache.ts";
 import { fetchT } from "../http.ts";
+import { channelVideos } from "./api.ts";
 import type { Subscription } from "../store.ts";
 
 export interface FeedItem {
@@ -34,19 +35,36 @@ export function parseFeed(xml: string): FeedItem[] {
   })).filter((i) => i.id);
 }
 
+async function fetchRss(id: string): Promise<FeedItem[]> {
+  let status = 0;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 300 * attempt));
+    const res = await fetchT(`https://www.youtube.com/feeds/videos.xml?channel_id=${id}`, {
+      headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) yt-classic" },
+    });
+    if (res.ok) return parseFeed(await res.text());
+    status = res.status;
+  }
+  throw new Error(`feed ${id}: ${status}`);
+}
+
+/** The channel's recent uploads from the Data API (1 quota unit): same shape as the RSS items, minus view counts. */
+async function uploadsAsFeed(id: string): Promise<FeedItem[]> {
+  const page = await channelVideos(id);
+  return page.items.map((v) => ({
+    id: v.id, title: v.title, channelId: id, channelTitle: v.channelTitle, publishedAt: v.publishedAt, description: v.description.slice(0, 300) || undefined,
+  }));
+}
+
 export function channelFeed(id: string): Promise<FeedItem[]> {
   return cached(`rss:${id}`, 15 * 60_000, async () => {
-    // The endpoint intermittently returns 404/500; a UA plus a couple of retries makes it reliable.
-    let status = 0;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 300 * attempt));
-      const res = await fetchT(`https://www.youtube.com/feeds/videos.xml?channel_id=${id}`, {
-        headers: { "user-agent": "Mozilla/5.0 (X11; Linux x86_64) yt-classic" },
-      });
-      if (res.ok) return parseFeed(await res.text());
-      status = res.status;
+    try {
+      return await fetchRss(id);
+    } catch (e) {
+      // YouTube's feed endpoint intermittently answers 404/500 for minutes at a time. Don't blank the home page.
+      console.error(`${(e as Error).message}; falling back to the Data API`);
+      return uploadsAsFeed(id);
     }
-    throw new Error(`feed ${id}: ${status}`);
   });
 }
 

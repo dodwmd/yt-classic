@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Watch - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<script type="module" src="/static/js/watch.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to load its data.</p></noscript>
+  <p id="status" role="status">Loading&hellip;</p>
+  <div id="watch" hidden>
+    <div id="main">
+      <h1 id="title"></h1>
+      <div id="player" hidden>
+        <video controls autoplay preload="auto" width="640" height="360">Your browser can't play this video.</video>
+        <div class="controls" hidden>
+          <button class="pp" type="button" aria-label="Play or pause">&#9654;</button>
+          <input class="bar" type="range" aria-label="Seek" min="0" max="0" step="1" value="0">
+          <span class="time"></span>
+          <input class="vol" type="range" aria-label="Volume" min="0" max="1" step="0.05" value="1">
+          <button class="fs" type="button" aria-label="Fullscreen">&#9974;</button>
+        </div>
+      </div>
+      <div class="quality">Quality: <span id="quality"></span></div>
+      <div class="info">
+        <div class="by">Uploaded by <a id="chan"></a> <span id="age"></span></div>
+        <div class="views" id="views"></div>
+      </div>
+      <details open><summary>Description</summary><div class="desc" id="desc"></div></details>
+    </div>
+    <div id="related">
+      <h3 id="rel-heading"></h3>
+      <div id="rel-list"></div>
+    </div>
+  </div>
+</div>
+<template id="t-rel">
+  <div class="rel">
+    <a class="thumb"><img width="120" height="68" alt=""><span class="dur" hidden></span></a>
+    <div>
+      <a class="title"></a>
+      <div class="sub"><span class="chan"></span><br><span class="meta"></span></div>
+    </div>
+  </div>
+</template>
+</body>
+</html>

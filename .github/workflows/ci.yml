@@ -35,6 +35,25 @@ jobs:
       - name: Unit and integration tests
         run: npm test
 
+  frontend:
+    name: Frontend lint, tests and JS budget
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Lint
+        run: npm run lint
+      - name: Tests (formatters, template lookups, JS size and safety guardrails)
+        run: npm test
+
   codeql:
     name: Static analysis (CodeQL)
     runs-on: ubuntu-latest
@@ -91,13 +110,14 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: backend/package-lock.json
+          cache-dependency-path: |
+            backend/package-lock.json
+            frontend/package-lock.json
       - name: Dependency audit (runtime deps any severity; all deps high and above)
-        working-directory: backend
         run: |
-          npm ci
-          npm audit --omit=dev
-          npm audit --audit-level=high
+          for dir in backend frontend; do
+            (cd "$dir" && npm ci && npm audit --omit=dev && npm audit --audit-level=high)
+          done
 
       - name: Dependency review (new or changed dependencies in this PR)
         uses: actions/dependency-review-action@v5
