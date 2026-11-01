@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.direnv/
+k3s-kubeconfig
+.envrc
+.env
+shell.local.nix
+backend/data/
+# global ignore has *result* (nix build symlinks); this is a real source file
+!backend/src/views/results.ts

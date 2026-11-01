@@ -1,0 +1,38 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Containerfile
+    env_file: ./backend/.env
+    # Run as your host user so the bind-mounted ./backend/data is writable (rootless podman).
+    user: "1000:1000"
+    userns_mode: keep-id
+    volumes: ["./backend/data:/data"]
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 1g
+    pids_limit: 256
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Containerfile
+    ports: ["8080:8080"]
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs: ["/tmp"]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 128m
+    pids_limit: 64
+    restart: unless-stopped

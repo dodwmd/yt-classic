@@ -1,0 +1,29 @@
+# Base image pinned by digest; bump deliberately (Dependabot/Renovate or by hand).
+FROM docker.io/library/node:22-bookworm-slim@sha256:4d676821dff059fd00d277ee4261ef34ea712317fed0737c03941481b5760c96
+
+# yt-dlp is pinned and checksum-verified; there is no self-update at runtime.
+# To update: set both args (sha256 from the release's SHA2-256SUMS) and rebuild; keep shell.nix in step.
+ARG YTDLP_VERSION=2026.10.26
+ARG YTDLP_SHA256=e51e69e89489f199530f13d32a4342da3ddb2cf34842f364603a066db05afbf3
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ffmpeg python3 curl ca-certificates \
+ && curl -fsSL -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/download/${YTDLP_VERSION}/yt-dlp" \
+ && echo "${YTDLP_SHA256}  /usr/local/bin/yt-dlp" | sha256sum -c - \
+ && chmod 0755 /usr/local/bin/yt-dlp \
+ && apt-get purge -y --auto-remove curl \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
+COPY src ./src
+
+# /data holds subscriptions.json; yt-dlp wants a writable cache dir (the root filesystem may be read-only).
+RUN mkdir -p /data && chown node:node /data
+ENV PORT=3000 DATA_DIR=/data XDG_CACHE_HOME=/tmp/cache
+USER node
+EXPOSE 3000
+# The health check lives in compose.yaml: podman builds OCI images, which ignore HEALTHCHECK.
+# Exec form: node is PID 1 and receives SIGTERM directly.
+CMD ["node", "--experimental-strip-types", "src/server.ts"]

@@ -1,0 +1,17 @@
+# Continuous delivery. Intentionally empty for now: no deployment target is configured.
+# CI (ci.yml) runs on pull requests only. When a deployment exists, add jobs here and add a
+# `push: branches: [main]` trigger (and/or keep the manual one below).
+name: CD
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy (not configured)
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "No deployment is configured yet."
