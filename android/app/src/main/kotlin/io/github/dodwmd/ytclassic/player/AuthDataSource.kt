@@ -107,17 +107,17 @@ internal class AuthDataSource(
         if (remaining == 0L) return C.RESULT_END_OF_INPUT
         val want = if (remaining == C.LENGTH_UNSET.toLong()) length else minOf(length.toLong(), remaining).toInt()
         val stream = input ?: return C.RESULT_END_OF_INPUT
-        val n = try {
-            stream.read(buffer, offset, want)
+        try {
+            val n = stream.read(buffer, offset, want)
+            if (n < 0) return C.RESULT_END_OF_INPUT // -1 = end of stream
+            if (remaining != C.LENGTH_UNSET.toLong()) remaining -= n
+            bytesTransferred(n)
+            return n
         } catch (e: IOException) {
             throw HttpDataSource.HttpDataSourceException.createForIOException(
                 e, DataSpec.Builder().setUri(getUri() ?: Uri.EMPTY).build(), HttpDataSource.HttpDataSourceException.TYPE_READ,
             )
         }
-        if (n < 0) return C.RESULT_END_OF_INPUT // -1 = end of stream
-        if (remaining != C.LENGTH_UNSET.toLong()) remaining -= n
-        bytesTransferred(n)
-        return n
     }
 
     /** The final URL, after any redirects. */
