@@ -38,7 +38,7 @@ class PlaybackService : MediaSessionService() {
     private inner class Guard : MediaSession.Callback {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
             if (controller.packageName == packageName || controller.isTrusted || session.isMediaNotificationController(controller)) {
-                MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailablePlayerCommands(allowedControllerCommands()).build()
+                MediaSession.ConnectionResult.accept(MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS, allowedControllerCommands())
             } else {
                 MediaSession.ConnectionResult.reject()
             }
