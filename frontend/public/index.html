@@ -28,7 +28,15 @@
         <div class="grid" id="cont-grid"></div>
       </div>
       <h3>New from your subscriptions</h3>
+      <div id="filters" role="group" aria-label="Feed filters">
+        <label>Channel <select id="f-channel"><option value="">All channels</option></select></label>
+        <label><input type="checkbox" id="f-watched"> Hide watched</label>
+        <label><input type="checkbox" id="f-shorts"> Hide Shorts</label>
+        <label><input type="checkbox" id="f-live"> Hide live</label>
+      </div>
+      <p id="feed-msg" role="status" hidden></p>
       <div class="grid" id="feed-grid"></div>
+      <p><button type="button" id="more" hidden>Load more</button></p>
     </div>
     <div id="subs">
       <h3>Subscriptions</h3>

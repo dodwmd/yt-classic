@@ -1,0 +1,58 @@
+{
+  "items": [
+    {
+      "id": "aVid0000000",
+      "title": "Video aVid0000000",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-30T12:00:00+00:00",
+      "views": "1000",
+      "durationSeconds": 750
+    },
+    {
+      "id": "bVid0000000",
+      "title": "Video bVid0000000",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-29T12:00:00+00:00",
+      "views": "1000",
+      "durationSeconds": 750
+    },
+    {
+      "id": "aVid0000002",
+      "title": "Video aVid0000002",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-26T12:00:00+00:00",
+      "views": "1002",
+      "durationSeconds": 750
+    },
+    {
+      "id": "bVid0000002",
+      "title": "Video bVid0000002",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-25T12:00:00+00:00",
+      "views": "1002",
+      "durationSeconds": 750
+    },
+    {
+      "id": "aVid0000004",
+      "title": "Video aVid0000004",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-22T12:00:00+00:00",
+      "views": "1004",
+      "durationSeconds": 750
+    },
+    {
+      "id": "bVid0000004",
+      "title": "Video bVid0000004",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-21T12:00:00+00:00",
+      "views": "1004",
+      "durationSeconds": 750
+    }
+  ]
+}

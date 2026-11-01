@@ -1,0 +1,102 @@
+{
+  "subs": [
+    {
+      "id": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "title": "Channel A"
+    },
+    {
+      "id": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "title": "Channel B"
+    }
+  ],
+  "feed": [
+    {
+      "id": "aVid0000000",
+      "title": "Video aVid0000000",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-30T12:00:00+00:00",
+      "views": "1000"
+    },
+    {
+      "id": "bVid0000000",
+      "title": "Video bVid0000000",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-29T12:00:00+00:00",
+      "views": "1000"
+    },
+    {
+      "id": "aVid0000001",
+      "title": "Video aVid0000001",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-28T12:00:00+00:00",
+      "views": "1001",
+      "short": true
+    },
+    {
+      "id": "bVid0000001",
+      "title": "Video bVid0000001",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-27T12:00:00+00:00",
+      "views": "1001",
+      "short": true
+    },
+    {
+      "id": "aVid0000002",
+      "title": "Video aVid0000002",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-26T12:00:00+00:00",
+      "views": "1002"
+    },
+    {
+      "id": "bVid0000002",
+      "title": "Video bVid0000002",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-25T12:00:00+00:00",
+      "views": "1002"
+    },
+    {
+      "id": "aVid0000003",
+      "title": "Video aVid0000003",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-24T12:00:00+00:00",
+      "views": "1003"
+    },
+    {
+      "id": "bVid0000003",
+      "title": "Video bVid0000003",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-23T12:00:00+00:00",
+      "views": "1003"
+    },
+    {
+      "id": "aVid0000004",
+      "title": "Video aVid0000004",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-22T12:00:00+00:00",
+      "views": "1004"
+    },
+    {
+      "id": "bVid0000004",
+      "title": "Video bVid0000004",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-21T12:00:00+00:00",
+      "views": "1004"
+    }
+  ],
+  "prefs": {
+    "hideWatched": false,
+    "shorts": "show",
+    "live": "show"
+  },
+  "continue": []
+}

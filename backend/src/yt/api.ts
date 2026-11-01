@@ -370,3 +370,47 @@ export function channelAbout(id: string): Promise<ChannelAbout | null> {
     };
   }, true);
 }
+
+/** What the home feed filters on. RSS has neither duration nor live state, so these come from the Data API. */
+export interface VideoFacts {
+  /** Seconds; 0 for live, upcoming and unknown. */
+  duration: number;
+  /** Live now or scheduled. */
+  live: boolean;
+  /** The API did not return the video (deleted, private): it is never hidden by a filter. */
+  gone?: boolean;
+}
+
+export const FACTS_BATCH = 50; // videos.list takes up to 50 ids per call, 1 quota unit
+const FACTS_TTL = 7 * 24 * 3600_000;
+const LIVE_FACTS_TTL = 10 * 60_000; // a stream's state changes within minutes or hours; a finished video's never does
+
+/**
+ * Durations and live state for many videos. One quota unit per 50 videos that are not already known; each video's
+ * facts are cached (and persisted in SQLite) under its own id, so a video costs at most one lookup per week.
+ */
+export function videoFacts(ids: string[]): Promise<Map<string, VideoFacts>> {
+  const unique = [...new Set(ids)];
+  let batch: Promise<Map<string, VideoFacts>> | undefined;
+  const missing: string[] = [];
+  const load = () => (batch ??= (async () => {
+    await Promise.resolve(); // let every cache miss register first
+    const out = new Map<string, VideoFacts>();
+    for (let i = 0; i < missing.length; i += FACTS_BATCH) {
+      const chunk = missing.slice(i, i + FACTS_BATCH);
+      const data = await call("videos", { part: "contentDetails,snippet", id: chunk.join(","), fields: "items(id,contentDetails/duration,snippet/liveBroadcastContent)" }); // 1 unit
+      for (const v of data.items ?? []) {
+        const live = v.snippet?.liveBroadcastContent === "live" || v.snippet?.liveBroadcastContent === "upcoming";
+        out.set(v.id, { duration: live ? 0 : isoSeconds(v.contentDetails?.duration), live });
+      }
+    }
+    return out;
+  })());
+  const entries = unique.map((id) =>
+    cached<VideoFacts>(`facts:${id}`, (f) => (f.live ? LIVE_FACTS_TTL : FACTS_TTL), async () => {
+      missing.push(id);
+      return (await load()).get(id) ?? { duration: 0, live: false, gone: true };
+    }, true).then((f) => [id, f] as const),
+  );
+  return Promise.all(entries).then((e) => new Map(e));
+}

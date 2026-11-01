@@ -7,7 +7,7 @@ const MAX_VALUE_BYTES = 1_000_000;
 const MAX_TOTAL_BYTES = 128 * 1024 * 1024; // persisted values on disk
 const TOUCH_MS = 60_000; // how often a memory hit refreshes the disk copy's last-used time
 /** Bump when the shape of anything persisted changes (VideoDetail, Channel, FeedItem, ...): old rows are then purged. */
-export const CACHE_VERSION = 1;
+export const CACHE_VERSION = 2;
 const PRUNE_EVERY = 200; // writes between pruning passes
 const NEGATIVE_TTL_MS = 60_000;
 
@@ -149,9 +149,10 @@ function put(key: string, val: unknown, ttlMs: number, persist: boolean): void {
 /**
  * TTL cache with LRU eviction, in-flight de-duplication, and no caching of failures.
  * With `persist` (JSON-safe metadata that stays valid for minutes or longer; never stream URLs) entries are also
- * written through to SQLite and loaded lazily after a restart.
+ * written through to SQLite and loaded lazily after a restart. `ttl` may be a function of the value (e.g. live videos expire sooner).
  */
-export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, persist = false): Promise<T> {
+export function cached<T>(key: string, ttl: number | ((val: T) => number), fn: () => Promise<T>, persist = false): Promise<T> {
+  const ttlMs = typeof ttl === "number" ? ttl : undefined;
   let hit = store.get(key);
   if (!hit && persist) {
     hit = readDisk(key);
@@ -172,7 +173,8 @@ export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, pers
   if (inflight) return inflight as Promise<T>;
   const p = (async () => fn())()
     .then((val) => {
-      put(key, val, isEmpty(val) ? Math.min(ttlMs, NEGATIVE_TTL_MS) : ttlMs, persist);
+      const t = ttlMs ?? (ttl as (v: T) => number)(val);
+      put(key, val, isEmpty(val) ? Math.min(t, NEGATIVE_TTL_MS) : t, persist);
       return val;
     })
     .finally(() => pending.delete(key));

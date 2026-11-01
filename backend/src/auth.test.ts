@@ -102,6 +102,10 @@ test("required mode: api and stream need credentials, healthz and session stay o
   assert.equal(api.status, 401);
   assert.deepEqual(JSON.parse(api.body), { error: "unauthorized" });
   assert.equal((await call(`/api/video/${VID}`)).status, 401);
+  assert.equal((await call("/api/feed")).status, 401);
+  assert.equal((await call("/api/prefs")).status, 401);
+  assert.equal((await call("/api/prefs", { method: "POST", body: "shorts=hide" })).status, 401);
+  assert.equal((await call("/api/feed", { headers: bearerHdr(TOKEN) })).status, 200);
   assert.equal((await call("/api/nope")).status, 401, "unknown api paths do not reveal that they are unknown");
   assert.equal((await call("/api/subscribe", { method: "POST", body: "id=x" })).status, 401);
   assert.equal((await call("/healthz")).status, 200);

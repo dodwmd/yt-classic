@@ -27,7 +27,7 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   `GET /api/channel/:id/playlists`, `/playlist/:playlistId` (only playlists owned by that channel), `/shorts`, `/live`
   (all take `?pageToken=`) and `/about`.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
-  view counts.
+  view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
   Settings in the Android app); see [Importing and exporting subscriptions](#importing-and-exporting-subscriptions).
 - **Search**: classic results list, paged, using yt-dlp (no API quota).
@@ -61,7 +61,7 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
-  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/tv/next`, `GET /api/tv/status`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
+  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/tv/next`, `GET /api/tv/status`, `GET /api/feed`, `GET/POST /api/prefs`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
 - **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `playlists.html`, `tv.html`, `login.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
@@ -328,6 +328,37 @@ API notes: `POST /api/progress` takes `id`, `position` (seconds) and optional `f
 other POSTs, refuses cross-origin requests; `GET /api/video/:id` adds `progress: {position, completed}` when the video
 is in the history; `/api/home` adds `continue` (up to 12 unfinished videos, most recent first).
 
+### Feed controls
+
+The home feed is the merge of your channels' RSS feeds (15-minute cache per channel), newest first, held in memory up
+to **400 items**; the first screen shows 60 and "Load more" pages through the rest. The feed is as deep as the RSS
+feeds are (about 15 videos per channel), so 400 is reached with roughly 27 or more subscriptions.
+
+- `GET /api/home` keeps `subs`, `feed` (the first 60) and `continue`, and adds `next` (cursor, absent at the end) and
+  `prefs`. It accepts the same filters as `/api/feed`.
+- `GET /api/feed?limit=&before=<cursor>&channel=<UC id>&hideWatched=0|1&shorts=show|hide&live=show|hide` returns
+  `{items, next}`; `limit` is 1 to 100 (default 60). The cursor is opaque (the publish time and id of the last item); items are
+  ordered by time and then id, so equal timestamps never skip or repeat an item, and a cursor stays valid when the
+  feed refreshes. A filter that hides items makes a page look further ahead until `limit` items are found, so a page
+  can come back short only at the very end. An unknown or malformed parameter is a 400.
+- A filter left out of the query falls back to the saved preference (below); nothing is hidden until you choose to.
+  Both clients always send the filters they show, so the screen and the server cannot disagree.
+- `GET /api/prefs` and `POST /api/prefs` (same-origin, form or JSON with string values) keep `hideWatched` (`0`/`1`),
+  `shorts` and `live` (`show`/`hide`) in the SQLite `meta` table (`feed.hideWatched`, `feed.shorts`, `feed.live`) so the
+  web UI and the Android app share them. Only these keys are accepted, partial updates are fine, any bad key or value
+  is a 400 and changes nothing. The channel filter is per visit and not saved.
+- **Shorts and live.** RSS carries neither duration nor live state, so a Shorts/live filter looks them up with the Data
+  API `videos.list` (**1 quota unit per 50 videos**, only for videos not seen before). Results are cached per video id in
+  SQLite for a week (10 minutes for live and upcoming videos, whose state changes), so a cold 400-item feed costs at most 8
+  units once and normally 0. A Short is a video of 60 seconds or less, or one the feed links as `/shorts/`. Live
+  and upcoming videos report a duration of 0 and are never counted as Shorts. Videos the API does not return (deleted,
+  private) and any failed lookup are shown rather than hidden. With neither filter on, no lookups are made. Items that
+  were looked up carry `durationSeconds` and `live`.
+- **Hide watched** hides videos you watched to the end (a single SQL query per 50 candidates).
+- Android: the "Subscriptions" chips filter the feed (tap a channel to show only it, tap again to clear; "Open
+  <channel>" next to the chips opens its page); "Hide watched", "Hide Shorts" and "Hide live" are chips under
+  "New from your subscriptions"; "Load more" ends the list. Changing a toggle is saved through `/api/prefs`.
+
 ## Android app
 
 `android/` is a native Kotlin + Jetpack Compose app that uses the same backend API as the web frontend: home feed,
@@ -555,7 +586,9 @@ backend/
   src/status.ts          /api/status: resolve counters, persisted last success/failure, health
   src/yt/search.ts       yt-dlp search (Data API fallback)
   src/yt/innertube.ts    related videos from YouTube's /next
-  src/yt/rss.ts          channel RSS feeds
+  src/yt/rss.ts          channel RSS feeds, merge
+  src/feed.ts            feed paging, cursors and filters (Shorts, live, watched)
+  src/prefs.ts           saved feed preferences (meta table)
   src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
   src/history.ts         watch history and resume positions (SQLite)
   src/playlists.ts       Watch later and user playlists (SQLite)

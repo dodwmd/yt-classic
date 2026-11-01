@@ -230,3 +230,16 @@ test("every page with the masthead links to TV, and nginx routes /tv", () => {
   for (const f of htmlFiles.filter((h) => h !== "login.html")) assert.match(read(f), /<a id="tvlink" href="\/tv"/, `${f} has no TV entry`);
   assert.match(readFileSync(new URL("../nginx.conf", import.meta.url), "utf8"), /location = \/tv\s+\{[^}]*try_files \/tv\.html/);
 });
+
+test("home: every feed filter is a labelled control and the script saves them through /api/prefs", () => {
+  const html = read("index.html"), js = read("js/home.js");
+  const bar = /<div id="filters"[^>]*role="group"[^>]*>([\s\S]*?)<\/div>/.exec(html);
+  assert.ok(bar, "the filter bar is a labelled group");
+  const controls = [...bar[1].matchAll(/<(?:input|select)\b[^>]*id="([\w-]+)"/g)].map((m) => m[1]);
+  assert.deepEqual(controls, ["f-channel", "f-watched", "f-shorts", "f-live"]);
+  assert.equal([...bar[1].matchAll(/<label>/g)].length, controls.length, "each control sits inside its own <label>");
+  for (const id of controls) assert.ok(js.includes(`#${id}`), `home.js uses #${id}`);
+  assert.match(js, /\/api\/prefs/);
+  assert.match(js, /\/api\/feed/);
+  assert.match(html, /<button type="button" id="more"/);
+});
