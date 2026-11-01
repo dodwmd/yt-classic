@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -26,7 +27,12 @@ import io.github.dodwmd.ytclassic.data.timeAgo
 import io.github.dodwmd.ytclassic.player.StreamPlayer
 
 @Composable
-fun WatchScreen(api: YtApi, id: String, startSeconds: Long, onVideo: (String) -> Unit, onChannel: (String) -> Unit) {
+fun WatchScreen(
+    api: YtApi, id: String, startSeconds: Long, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit,
+    onVideo: (String) -> Unit, onChannel: (String) -> Unit,
+) {
+    // Leaving this screen (back, or opening another video) must not leave the app stuck in fullscreen.
+    DisposableEffect(Unit) { onDispose { onFullscreen(false) } }
     // Survives leaving the screen and coming back (or the process being killed), so a detour doesn't lose your place.
     // A LongArray rather than state: it's written every few seconds and nothing should recompose for it.
     val resume = rememberSaveable(id) { longArrayOf(startSeconds) }
@@ -36,8 +42,8 @@ fun WatchScreen(api: YtApi, id: String, startSeconds: Long, onVideo: (String) ->
         var expanded by remember(v.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
-            StreamPlayer(api, v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it })
-            LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            StreamPlayer(api, v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
+            if (!fullscreen) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {
                         Text(v.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)

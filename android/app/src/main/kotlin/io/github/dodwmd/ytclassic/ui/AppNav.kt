@@ -53,6 +53,7 @@ import kotlinx.coroutines.flow.first
 fun AppNav(app: App) {
     val nav = rememberNavController()
     var query by rememberSaveable { mutableStateOf("") }
+    var fullscreen by rememberSaveable { mutableStateOf(false) } // the player is fullscreen: no masthead
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // Searching (or navigating) should put the keyboard away, otherwise it covers the results.
@@ -67,7 +68,7 @@ fun AppNav(app: App) {
 
     Scaffold(
         topBar = {
-            Masthead(
+            if (!fullscreen) Masthead(
                 query = query, onQuery = { query = it },
                 onHome = { settle(); toHome() },
                 onSearch = { if (query.isNotBlank()) { settle(); nav.navigate("search/${Uri.encode(query.trim())}") } },
@@ -85,7 +86,7 @@ fun AppNav(app: App) {
                 "watch/{id}?t={t}",
                 listOf(navArgument("id") { type = NavType.StringType }, navArgument("t") { type = NavType.LongType; defaultValue = 0L }),
             ) { entry ->
-                WatchScreen(app.api, entry.arguments?.getString("id").orEmpty(), entry.arguments?.getLong("t") ?: 0L, openVideo, openChannel)
+                WatchScreen(app.api, entry.arguments?.getString("id").orEmpty(), entry.arguments?.getLong("t") ?: 0L, fullscreen, { fullscreen = it }, openVideo, openChannel)
             }
             composable("channel/{id}", listOf(navArgument("id") { type = NavType.StringType })) { entry ->
                 ChannelScreen(app.api, entry.arguments?.getString("id").orEmpty(), openVideo)
