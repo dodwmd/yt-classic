@@ -28,13 +28,13 @@ test("no HTML-injection or dynamic-code sinks in the JS", () => {
 test("scripts are same-origin modules; no inline scripts, no third-party resources", () => {
   for (const f of htmlFiles) {
     const html = read(f);
-    for (const m of html.matchAll(/<script\b([^>]*)>/g)) {
-      const src = /\bsrc="([^"]+)"/.exec(m[1])?.[1];
+    for (const m of html.matchAll(/<script\b([^>]*)>/gi)) {
+      const src = /\bsrc="([^"]+)"/i.exec(m[1])?.[1];
       assert.ok(src, `${f}: inline <script> is not allowed`);
       assert.ok(src.startsWith("/static/js/") && existsSync(join(PUBLIC, src.replace("/static/", ""))), `${f}: bad script src ${src}`);
-      assert.match(m[1], /type="module"/, `${f}: scripts must be modules`);
+      assert.match(m[1], /type="module"/i, `${f}: scripts must be modules`);
     }
-    assert.doesNotMatch(html, /<(link|script|iframe|img|video)[^>]+(?:src|href)="https?:\/\//, `${f}: loads a remote resource`);
+    assert.doesNotMatch(html, /<(link|script|iframe|img|video)[^>]+(?:src|href)="https?:\/\//i, `${f}: loads a remote resource`);
   }
 });
 
