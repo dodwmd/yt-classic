@@ -231,6 +231,7 @@ language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 |---|---|
 | Error page: `YouTube API … 403 … IP address restriction` | The key is restricted to other IPs. Add the address named in the error to the key's restrictions, or remove the IP restriction. |
 | `YT_API_KEY is not set` | Create `backend/.env` from `backend/.env.example`. |
+| `502` from every page right after recreating the backend | nginx re-resolves the backend name every few seconds (`frontend/05-resolver.sh`), so it recovers on its own within about 5 s. If it persists, check `podman-compose logs frontend` for `05-resolver: using …` and `podman-compose logs backend`. |
 | Video won't start, or `/stream/…` returns 502 | yt-dlp is out of date or YouTube changed. Bump the pinned yt-dlp in `backend/Containerfile` and rebuild (`podman-compose up -d --build`). Check `podman-compose logs backend`; it prints the yt-dlp version at start. A 503 means all `MAX_STREAMS` slots are busy. |
 | Wrong audio language on a dubbed video | Set `AUDIO_LANG`, or add `&a=<code>` to the watch URL. |
 | Feed missing some channels | YouTube's RSS endpoint is occasionally flaky; the backend retries and skips channels that fail. Reload. |
@@ -273,7 +274,8 @@ frontend/
   public/classic.css     the classic look; follows the system light/dark setting
   public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
-  nginx.conf             page routes, security headers, reverse proxy for /api and /stream
+  nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
+  05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line
 android/                 the native Android app (Kotlin + Compose); has its own shell.nix and Gradle wrapper
 compose.yaml             runs both containers
 shell.nix                dev shell

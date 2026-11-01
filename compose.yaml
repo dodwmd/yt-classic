@@ -26,9 +26,11 @@ services:
       context: ./frontend
       dockerfile: Containerfile
     ports: ["8080:8080"]
+    # Ordering only: nginx re-resolves "backend" per request and starts fine without it, so don't gate on health
+    # (a backend that is down or restarting would otherwise also block starting or restarting the frontend).
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     read_only: true
     tmpfs: ["/tmp"]
     cap_drop: [ALL]
