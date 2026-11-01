@@ -22,7 +22,7 @@ COPY src ./src
 # /data holds subscriptions.json; yt-dlp wants a writable cache dir (the root filesystem may be read-only).
 RUN mkdir -p /data && chown node:node /data
 ENV PORT=3000 DATA_DIR=/data XDG_CACHE_HOME=/tmp/cache
-USER node
+USER 1000:1000
 EXPOSE 3000
 # The health check lives in compose.yaml: podman builds OCI images, which ignore HEALTHCHECK.
 # Exec form: node is PID 1 and receives SIGTERM directly.
