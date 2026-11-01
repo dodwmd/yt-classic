@@ -77,6 +77,16 @@ jobs:
             echo "::error::gitleaks did not report scanning any commits"; exit 1
           fi
 
+      - name: Lint backend Containerfile
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: backend/Containerfile
+          ignore: DL3008 # apt packages follow the pinned base image's release
+      - name: Lint frontend Containerfile
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: frontend/Containerfile
+
       - uses: actions/setup-node@v7
         with:
           node-version: 22
@@ -93,16 +103,6 @@ jobs:
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
-
-      - name: Lint backend Containerfile
-        uses: hadolint/hadolint-action@v3.5.0
-        with:
-          dockerfile: backend/Containerfile
-          ignore: DL3008 # apt packages follow the pinned base image's release
-      - name: Lint frontend Containerfile
-        uses: hadolint/hadolint-action@v3.5.0
-        with:
-          dockerfile: frontend/Containerfile
 
   build:
     name: Build images (docker compose build)
