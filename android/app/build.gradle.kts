@@ -13,7 +13,7 @@ android {
         applicationId = "io.github.dodwmd.ytclassic"
         minSdk = 26
         targetSdk = 37
-        versionCode = 1
+        versionCode = System.getenv("ANDROID_VERSION_CODE")?.toIntOrNull() ?: 1 // CD sets this to the run number
         versionName = "0.1.0"
     }
 
@@ -27,9 +27,23 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    signingConfigs {
+        // Only defined when CD provides the keystore; local and PR builds leave the release APK unsigned.
+        val keystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+        if (!keystorePath.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(keystorePath)
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("ANDROID_KEY_ALIAS")
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // Shrink and obfuscate the release build; not signed here (add a signingConfig when publishing).
+            // Shrink and obfuscate the release build. Signed only when the release signingConfig exists (see above).
+            signingConfigs.findByName("release")?.let { signingConfig = it }
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
