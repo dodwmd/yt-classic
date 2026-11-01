@@ -262,7 +262,7 @@ backend/
   src/store.ts           subscriptions.json
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
-  public/classic.css     the classic look
+  public/classic.css     the classic look; follows the system light/dark setting
   public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream
