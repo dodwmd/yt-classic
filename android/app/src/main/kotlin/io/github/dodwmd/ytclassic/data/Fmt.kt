@@ -1,5 +1,6 @@
 package io.github.dodwmd.ytclassic.data
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.text.NumberFormat
 import java.time.OffsetDateTime
 import java.util.Locale
@@ -38,6 +39,18 @@ fun formatViews(n: String?): String {
 
 /** Display strings from the watch-next feed ("1.2M", "3K watching"): add "views" only when it isn't there. */
 fun viewsText(v: String): String = if (Regex("view|watching", RegexOption.IGNORE_CASE).containsMatchIn(v)) v else "$v views"
+
+/** What a stream's state is called on the Live tab; empty for an ordinary video. */
+fun liveLabel(live: String?): String = when (live) {
+    "live" -> "Live now"
+    "upcoming" -> "Upcoming"
+    "ended" -> "Past stream"
+    else -> ""
+}
+
+/** The links of a channel's About that are safe to open: web addresses only (any case of http/https), normalised; everything else is dropped. */
+fun webLinks(links: List<String>): List<String> =
+    links.mapNotNull { runCatching { it.trim().toHttpUrlOrNull()?.takeIf { u -> u.host.isNotEmpty() }?.toString() }.getOrNull() }.distinct()
 
 fun joinParts(vararg parts: String?): String = parts.filter { !it.isNullOrEmpty() }.joinToString(" · ")
 

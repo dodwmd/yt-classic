@@ -15,11 +15,36 @@ export async function api(path, init) {
   return body;
 }
 
-const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
+// A channel URL's tab, playlist and page token: the same allowlists as the backend's (a test keeps the patterns in step).
+// Nothing from the address bar is passed on as it is: the tab comes out of a fixed Map (so only a constant can come out),
+// the others are the regexps' own captured groups, and requests encode them again.
+export const TABS = ["videos", "playlists", "shorts", "live", "about"];
+const TAB_NAME = new Map(TABS.map((t) => [t, t]));
+const LIST_ID = /^((?:PL[\w-]{16,32}|UU[\w-]{22}|OL[\w-]{20,40}|FL[\w-]{22}|LL[\w-]{22}))$/, TOKEN = /^([\w-]{1,120})$/;
+export function channelParams(q) {
+  const tab = TAB_NAME.get(q.get("tab")) ?? "videos";
+  return { tab, list: tab === "playlists" ? LIST_ID.exec(q.get("list") ?? "")?.[1] ?? "" : "", pageToken: TOKEN.exec(q.get("pageToken") ?? "")?.[1] ?? "" };
+}
+export function channelHref(id, { tab = "videos", list = "", pageToken = "" } = {}) {
+  const q = new URLSearchParams();
+  if (tab !== "videos") q.set("tab", tab);
+  if (list) q.set("list", list);
+  if (pageToken) q.set("pageToken", pageToken);
+  return `/channel/${encodeURIComponent(id)}${q.size ? `?${q}` : ""}`;
+}
+// The API requests a channel page makes: the header (never the uploads, except for the Videos tab) and the tab's data.
+const TAB_PATH = new Map([["playlists", "/playlists"], ["shorts", "/shorts"], ["live", "/live"], ["about", "/about"]]);
+export function channelRequests(id, { tab, list, pageToken }) {
+  const base = "/api/channel/" + encodeURIComponent(id), tok = pageToken ? "?pageToken=" + encodeURIComponent(pageToken) : "";
+  if (tab === "videos") return { head: base + tok, body: null };
+  return { head: base + "/head", body: base + (list ? "/playlist/" + encodeURIComponent(list) : TAB_PATH.get(tab)) + tok };
+}
+
+const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})(?:\?([^#]*))?$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
 const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"], ["/tv", "/tv"]]);
 export function destination(next) {
   const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
-  return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
+  return w ? "/watch?v=" + w[1] : c ? channelHref(c[1], channelParams(new URLSearchParams(c[2]))) : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
 }
 
 const login = document.getElementById("login");
@@ -30,7 +55,6 @@ export const clone = (id) => document.getElementById(id).content.firstElementChi
 export const safeImg = (u) => (typeof u === "string" && u.startsWith("https://") ? u : "");
 
 export const watchHref = (id, extra = "") => `/watch?v=${encodeURIComponent(id)}${extra}`;
-export const channelHref = (id) => `/channel/${encodeURIComponent(id)}`;
 export const thumbUrl = (id, size = "mqdefault") => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/${size}.jpg`;
 
 export async function run(main) {

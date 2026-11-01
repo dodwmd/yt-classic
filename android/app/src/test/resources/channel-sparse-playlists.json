@@ -1,0 +1,8 @@
+{
+  "page": {
+    "items": [
+      { "id": "PLssssssssssssssssss", "title": "No thumbnail, no count", "description": "", "thumb": "", "publishedAt": "" },
+      { "id": "PLtttttttttttttttttt", "title": "Only an id and a title" }
+    ]
+  }
+}

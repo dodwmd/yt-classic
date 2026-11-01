@@ -43,6 +43,7 @@ import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.formatSeconds
 import io.github.dodwmd.ytclassic.data.formatViews
 import io.github.dodwmd.ytclassic.data.joinParts
+import io.github.dodwmd.ytclassic.data.liveLabel
 import io.github.dodwmd.ytclassic.data.timeAgo
 import io.github.dodwmd.ytclassic.player.tvNeedMessage
 import io.github.dodwmd.ytclassic.data.viewsText
@@ -68,7 +69,7 @@ fun RelatedRow(r: RelatedItem, onVideo: (String) -> Unit, thumbWidth: Int = 160,
 @Composable
 fun SummaryRow(v: VideoSummary, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
     thumb = v.thumb, title = v.title, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.let { { LaterNote(it, v.id) } }, duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds),
-    details = listOf(v.channelTitle, joinParts(timeAgo(v.publishedAt), formatViews(v.views))),
+    details = listOf(v.channelTitle, joinParts(liveLabel(v.live), timeAgo(v.publishedAt), formatViews(v.views))),
     onClick = { onVideo(v.id) },
 )
 
@@ -261,70 +262,6 @@ fun SearchScreen(api: YtApi, query: String, onVideo: (String) -> Unit) {
                             }
                         }) { Text("Load more") }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit) {
-    val loaded = rememberLoad(id) { api.channel(id) }
-    LoadedContent(loaded) { c ->
-        var subscribed by remember(c) { mutableStateOf(c.subscribed) }
-        var busy by remember(c) { mutableStateOf(false) }
-        var failure by remember(c) { mutableStateOf<String?>(null) }
-        var items by remember(c) { mutableStateOf(c.page.items.distinctBy { it.id }) }
-        var token by remember(c) { mutableStateOf(c.page.nextPageToken) }
-        var showAbout by remember(c) { mutableStateOf(false) }
-        val scope = rememberCoroutineScope()
-        val watched = rememberWatched(api, items.map { it.id })
-        val later = rememberLater(api, items.map { it.id })
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(c.channel.title, style = MaterialTheme.typography.titleLarge)
-                        c.channel.subscribers?.toLongOrNull()?.let { Text("%,d subscribers".format(it), color = Muted) }
-                    }
-                    Button(enabled = !busy, onClick = {
-                        busy = true
-                        scope.launch {
-                            try {
-                                subscribed = api.setSubscribed(c.channel.id, !subscribed)
-                                failure = null
-                            } catch (e: ApiException) {
-                                failure = e.message
-                            } finally {
-                                busy = false
-                            }
-                        }
-                    }) { Text(if (subscribed) "Unsubscribe" else "Subscribe") }
-                }
-                failure?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp)) }
-                if (c.channel.description.isNotBlank()) {
-                    Text(
-                        if (showAbout) "▼ About" else "▶ About", color = LinkBlue,
-                        modifier = Modifier.clickable { showAbout = !showAbout }.padding(horizontal = 12.dp, vertical = 8.dp),
-                    )
-                    if (showAbout) Text(c.channel.description, modifier = Modifier.padding(horizontal = 12.dp), color = Muted)
-                }
-            }
-            item { SectionTitle("Uploads") }
-            items(items, key = { it.id }) { SummaryRow(it, onVideo, it.id in watched, later) }
-            if (token != null) {
-                item {
-                    OutlinedButton(modifier = Modifier.padding(12.dp), onClick = {
-                        scope.launch {
-                            try {
-                                val next = api.channel(c.channel.id, token)
-                                items = items + next.page.items.filter { n -> items.none { it.id == n.id } }
-                                token = next.page.nextPageToken
-                            } catch (e: ApiException) {
-                                failure = e.message
-                            }
-                        }
-                    }) { Text("Load more") }
                 }
             }
         }

@@ -1,0 +1,17 @@
+{
+  "about": {
+    "id": "UCsBjURrPoezykLs9EqgamOA",
+    "title": "Fireship",
+    "description": "High-intensity code tutorials.\nWeb: https://fireship.io and https://github.com/fireship-io.\nNot a link: javascript:alert(1)",
+    "customUrl": "@Fireship",
+    "publishedAt": "2010-12-10T14:15:09Z",
+    "country": "US",
+    "viewCount": "895000000",
+    "subscriberCount": "4320000",
+    "videoCount": "859",
+    "links": [
+      "https://fireship.io/",
+      "https://github.com/fireship-io"
+    ]
+  }
+}

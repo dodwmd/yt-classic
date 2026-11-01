@@ -180,6 +180,12 @@ export function cached<T>(key: string, ttlMs: number, fn: () => Promise<T>, pers
   return p;
 }
 
+/** True when a fresh entry for [key] is held in memory or on disk (does not extend its life). */
+export function isCached(key: string): boolean {
+  const hit = store.get(key) ?? readDisk(key);
+  return !!hit && hit.exp > Date.now();
+}
+
 /** Forgets the in-memory entries only (what a restart does); the persisted copies stay. */
 export function clearCache(): void {
   store.clear();

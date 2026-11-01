@@ -75,8 +75,8 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
     }
     val toHome: () -> Unit = { nav.navigate("home") { popUpTo(nav.graph.id) { inclusive = true } } }
 
-    val openVideo = { id: String -> nav.navigate("watch/$id") }
-    val openChannel = { id: String -> nav.navigate("channel/$id") }
+    val openVideo = { id: String -> nav.navigate("watch/$id") { launchSingleTop = true } }
+    val openChannel = { id: String -> nav.navigate("channel/$id") { launchSingleTop = true } }
 
     Scaffold(
         topBar = {
@@ -108,7 +108,11 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
                 WatchScreen(app.api, entry.arguments?.getString("id").orEmpty(), entry.arguments?.getLong("t") ?: 0L, fullscreen, { fullscreen = it }, openVideo, openChannel)
             }
             composable("channel/{id}", listOf(navArgument("id") { type = NavType.StringType })) { entry ->
-                ChannelScreen(app.api, entry.arguments?.getString("id").orEmpty(), openVideo)
+                val id = entry.arguments?.getString("id").orEmpty()
+                ChannelScreen(app.api, id, openVideo) { nav.navigate("channel/$id/playlist/$it") { launchSingleTop = true } }
+            }
+            composable("channel/{id}/playlist/{pid}", listOf(navArgument("id") { type = NavType.StringType }, navArgument("pid") { type = NavType.StringType })) { entry ->
+                ChannelPlaylistScreen(app.api, entry.arguments?.getString("id").orEmpty(), entry.arguments?.getString("pid").orEmpty(), openVideo)
             }
             composable("status") { StatusScreen(app.api) }
             composable("settings") { SettingsScreen(app, onDone = toHome, onStatus = { nav.navigate("status") }) }

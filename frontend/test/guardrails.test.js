@@ -209,6 +209,16 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination(`/watch?v=${ID}`), `/watch?v=${ID}`);
   assert.equal(destination(`/watch?v=${ID}&t=5&q=720`), `/watch?v=${ID}`, "extra parameters are dropped, not copied");
   assert.equal(destination(`/channel/${UC}`), `/channel/${UC}`);
+  // A login bounce from a channel tab comes back to that tab: the query is rebuilt from the allowlists, never copied.
+  const PL = "PL" + "b".repeat(16);
+  assert.equal(destination(`/channel/${UC}?tab=shorts`), `/channel/${UC}?tab=shorts`);
+  assert.equal(destination(`/channel/${UC}?tab=playlists&list=${PL}&pageToken=I2`), `/channel/${UC}?tab=playlists&list=${PL}&pageToken=I2`);
+  assert.equal(destination(`/channel/${UC}?pageToken=abc`), `/channel/${UC}?pageToken=abc`);
+  assert.equal(destination(`/channel/${UC}?tab=about&x=//evil.com&pageToken=a.b`), `/channel/${UC}?tab=about`, "unknown and invalid parts are dropped");
+  assert.equal(destination(`/channel/${UC}?tab=shorts&list=${PL}`), `/channel/${UC}?tab=shorts`);
+  assert.equal(destination(`/channel/${UC}?tab=evil`), `/channel/${UC}`);
+  assert.equal(destination(`/channel/${UC}?`), `/channel/${UC}`);
+  for (const bad of [`/channel/${UC}?tab=shorts#//evil.com`, `/channel/${UC}/?tab=shorts`, `/channel/${UC}x?tab=shorts`]) assert.equal(destination(bad), "/", bad);
   assert.equal(destination("/results?search_query=nix+os"), "/", "search pages fall back to the home page");
   // Through the real query-string decoding that the login page uses (%09 turns into a TAB there).
   for (const evil of ["/%09/evil.com", "/%0a/evil.com", "//evil.com", "/%5cevil.com"]) assert.equal(destination(new URLSearchParams(`next=${evil}`).get("next")), "/", evil);

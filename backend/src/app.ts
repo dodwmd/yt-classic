@@ -2,8 +2,9 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { channel, channelVideos, video } from "./yt/api.ts";
+import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
+import { QuotaError, tabRequestWait } from "./tabquota.ts";
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { channelFeed, subscriptionFeed } from "./yt/rss.ts";
@@ -33,6 +34,7 @@ export function resetTvLimiter(): void {
   tvLimiter = new TvLimiter();
 }
 
+const CHANNEL_TABS = ["head", "playlists", "playlist", "shorts", "live", "about"];
 const text = { "content-type": "text/plain; charset=utf-8" };
 
 function json(res: ServerResponse, status: number, body: unknown, headers: Record<string, string> = {}): void {
@@ -419,14 +421,37 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   }
 
   if (path.startsWith("/api/channel/")) {
-    const id = path.slice("/api/channel/".length);
+    const [id, tab, pid, ...extra] = path.slice("/api/channel/".length).split("/");
     if (!CHANNEL_ID.test(id)) return json(res, 400, { error: "bad channel id" });
     const token = param("pageToken");
-    if (token.length > 200) return json(res, 400, { error: "bad page token" });
-    const c = await channel(id); // resolve first so an unknown channel is a clean 404, not an upstream error
-    if (!c) return json(res, 404, { error: "channel not found" });
-    const [page, subs] = await Promise.all([channelVideos(id, token), listSubs()]);
-    return json(res, 200, { channel: c, page, subscribed: subs.some((s) => s.id === id) });
+    if (token && !PAGE_TOKEN.test(token)) return json(res, 400, { error: "bad page token" });
+    if (tab !== undefined && (!CHANNEL_TABS.includes(tab) || extra.length || (tab === "playlist") !== (pid !== undefined))) return json(res, 404, { error: "not found" });
+    if (tab === "playlist" && !YT_PLAYLIST_ID.test(pid)) return json(res, 400, { error: "bad playlist id" });
+    try {
+      if (tab !== undefined) {
+        const wait = tabRequestWait();
+        if (wait) return json(res, 429, { error: "Too many channel tab requests this hour. Try again later." }, { "retry-after": String(wait) });
+        const c = (await tabChannel(id)).channel; // an unknown channel is a clean 404, not an upstream error
+        if (!c) return json(res, 404, { error: "channel not found" });
+        if (tab === "head") return json(res, 200, { channel: c, subscribed: (await listSubs()).some((s) => s.id === id) });
+        if (tab === "playlists") return json(res, 200, { page: await channelPlaylists(id, token) });
+        if (tab === "playlist") {
+          const pl = await ownedPlaylist(id, pid);
+          if (!pl) return json(res, 404, { error: "playlist not found" });
+          return json(res, 200, { playlist: pl, page: await playlistVideos(id, pid, token) });
+        }
+        if (tab === "shorts" || tab === "live") return json(res, 200, { page: await channelKind(id, tab, token) });
+        const about = await channelAbout(id);
+        return about ? json(res, 200, { about }) : json(res, 404, { error: "channel not found" });
+      }
+      const c = await channel(id); // resolve first so an unknown channel is a clean 404, not an upstream error
+      if (!c) return json(res, 404, { error: "channel not found" });
+      const [page, subs] = await Promise.all([channelVideos(id, token), listSubs()]);
+      return json(res, 200, { channel: c, page, subscribed: subs.some((s) => s.id === id) });
+    } catch (e) {
+      if (e instanceof QuotaError) return json(res, 429, { error: e.message }, { "retry-after": String(e.retryAfter) });
+      throw e;
+    }
   }
 
   if (req.method === "POST" && (path === "/api/subscribe" || path === "/api/unsubscribe")) {

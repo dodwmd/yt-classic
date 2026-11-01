@@ -16,6 +16,16 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
 ## Features
 
+- **Channel tabs** (web `?tab=videos|playlists|shorts|live|about`, Android tab row): Videos (uploads), Playlists (the channel's
+  public playlists, each opens its videos; nothing auto-advances), Shorts (uploads of 61 s or less), Live (current,
+  upcoming and past streams) and About (description, handle, join date, country, view/subscriber counts, links found in the
+  description). Shorts are detected by length (61 s or less), so Shorts of up to 3 minutes are not recognised and appear
+  only under Videos. Shorts and Live scan at most 3 uploads pages (2 Data API units each) per request and are cached.
+  The tab routes share a Data API budget (`TAB_UNITS_MAX`, default 500 units a day) and an hourly request cap
+  (`TAB_REQUESTS_PER_HOUR`, default 1200); beyond either they answer 429 with `Retry-After`. Only first pages are
+  kept in the database; page tokens must match `[A-Za-z0-9_-]{1,120}`.
+  `GET /api/channel/:id/playlists`, `/playlist/:playlistId` (only playlists owned by that channel), `/shorts`, `/live`
+  (all take `?pageToken=`) and `/about`.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts.
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
@@ -399,6 +409,8 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `MAX_STREAMS` | `3` | Concurrent video streams; extra requests get 503 |
 | `STREAM_MAX_SECONDS` | `21600` | Hard cap on one stream's duration |
 | `SEARCH_FALLBACK_MAX` | `20` | Daily cap on Data API searches (100 quota units each), including their follow-on pages |
+| `TAB_UNITS_MAX` | `500` | Daily Data API units the channel tab routes may use (1-2 units a fetch); more gets 429 |
+| `TAB_REQUESTS_PER_HOUR` | `1200` | Channel tab requests per hour, cached or not; more gets 429 |
 
 The numeric settings must be whole numbers; anything else is logged and the default is used.
 
