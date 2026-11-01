@@ -9,7 +9,10 @@
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "noFallthroughCasesInSwitch": true,
-    "noImplicitOverride": true
+    "noImplicitOverride": true,
+    "types": [
+      "node"
+    ]
   },
   "include": [
     "src"
