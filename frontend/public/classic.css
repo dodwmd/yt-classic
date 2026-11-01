@@ -29,11 +29,15 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .controls .bar { flex: 1; } .controls .vol { width: 70px; } .controls .time { font-size: 12px; min-width: 90px; }
 .controls button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 14px; }
 
+/* Keyboard focus must stay visible on the always-dark control bar, in light and dark themes. */
+.controls button:focus-visible, .controls input:focus-visible, .controls a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px #000; }
+a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
+
 /* --- Small screens and touch. Desktop rules above are untouched; everything below only applies on phones/tablets. --- */
-#masthead { flex-wrap: wrap; } #masthead form { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
-#masthead input { max-width: 100%; min-width: 0; box-sizing: border-box; }
-img { max-width: 100%; } .result .meta, .rel > div, .card { min-width: 0; overflow-wrap: anywhere; }
-@media (max-width: 800px) {
+@media (max-width: 860px) {
+  #masthead { flex-wrap: wrap; } #masthead form { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
+  #masthead input { max-width: 100%; min-width: 0; box-sizing: border-box; }
+  img { max-width: 100%; } .result .meta, .rel > div, .card { min-width: 0; overflow-wrap: anywhere; }
   body { font-size: 15px; }
   #masthead { gap: 8px 16px; padding: 8px 12px; } #masthead form { flex: 1 1 240px; } #masthead input { flex: 1; width: auto; font-size: 16px; min-height: 40px; }
   #page { padding: 0 12px; margin: 12px auto; }
@@ -56,3 +60,7 @@ img { max-width: 100%; } .result .meta, .rel > div, .card { min-width: 0; overfl
   .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .fs { order: 4; }
 }
 @media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .controls .vol { display: none; } }
+@media (max-height: 500px) and (orientation: landscape) and (max-width: 900px) {
+  #player { max-width: calc((100vh - 170px) * 16 / 9); margin: 0 auto; }
+  .controls { flex-wrap: nowrap; } .controls .bar { flex: 1 1 auto; order: 2; min-width: 0; } .controls .time { flex: none; order: 3; } .controls .vol { order: 4; } .controls .fs { order: 5; }
+}
