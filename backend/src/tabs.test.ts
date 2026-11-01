@@ -9,10 +9,14 @@ import { createApp } from "./app.ts";
 import { clearCache } from "./cache.ts";
 import { getDb } from "./db.ts";
 import { MAX_SCAN_PAGES, descriptionLinks } from "./yt/api.ts";
+import { resetTabQuota } from "./tabquota.ts";
 
 const CH = "UC" + "b".repeat(22);
 const EMPTY = "UC" + "e".repeat(22);
 const OTHER = "UC" + "o".repeat(22);
+const CH2 = "UC" + "c".repeat(22);
+let aboutGone = false;
+let channelCalls = 0;
 const PL = "PL" + "x".repeat(16);
 const FOREIGN = "PL" + "f".repeat(16);
 const TOKEN = "tabs-test-access-token-0123456789";
@@ -37,6 +41,7 @@ function upstream(url: URL): { status: number; body: unknown } {
   if (mode === "down") return { status: 500, body: { error: { message: `boom ${KEY}` } } };
   if (p === "channels") {
     const id = q.get("id");
+    if (aboutGone && ++channelCalls > 1) return { status: 200, body: { items: [] } };
     if (id === OTHER) return { status: 200, body: { items: [] } };
     return {
       status: 200,
@@ -133,6 +138,11 @@ beforeEach(() => {
   getDb().exec("DELETE FROM cache");
   calls = [];
   mode = "normal";
+  aboutGone = false;
+  channelCalls = 0;
+  resetTabQuota();
+  delete process.env.TAB_UNITS_MAX;
+  delete process.env.TAB_REQUESTS_PER_HOUR;
 });
 
 function get(path: string, headers: Record<string, string> = {}) {
@@ -309,4 +319,94 @@ test("every tab is behind the access token", async () => {
   } finally {
     delete process.env.ACCESS_TOKEN;
   }
+});
+
+test("bad page tokens (anything outside the Data API alphabet, or too long) are refused", async () => {
+  for (const t of ["a%20b", "x%2Fy", "a.b", "a%3Fb", "%3Cscript%3E", "x".repeat(121)]) {
+    for (const tab of ["", "/playlists", "/shorts"]) assert.equal((await get(`/api/channel/${CH}${tab}?pageToken=${t}`)).status, 400, `${tab} ${t}`);
+  }
+  assert.equal((await get(`/api/channel/${CH}/playlists?pageToken=${"x".repeat(120)}`)).status, 200);
+  assert.equal(units() > 0, true);
+});
+
+test("minted page tokens cannot cost more than the daily budget", async () => {
+  process.env.TAB_UNITS_MAX = "10";
+  const statuses: number[] = [];
+  for (let i = 0; i < 20; i++) statuses.push((await get(`/api/channel/${CH}/playlists?pageToken=minted${i}`)).status);
+  assert.ok(units() <= 10, `${units()} upstream calls for a budget of 10`);
+  assert.ok(statuses.filter((s) => s === 200).length <= 10 && statuses.includes(429), statuses.join());
+  const r = await get(`/api/channel/${CH}/shorts?pageToken=minted-x`);
+  assert.equal(r.status, 429);
+  assert.match(r.body, /quota/i);
+  assert.equal(units() <= 10, true);
+  // Cached answers keep working when the budget is gone, and so do unrelated routes.
+  assert.equal((await get(`/api/channel/${CH}/playlists?pageToken=minted0`)).status, 200);
+});
+
+test("quota refusals carry Retry-After, and the hourly request cap answers 429 too", async () => {
+  process.env.TAB_UNITS_MAX = "0";
+  const raw = await new Promise<import("node:http").IncomingHttpHeaders>((resolve) => {
+    request({ host: "127.0.0.1", port, path: `/api/channel/${CH}/about` }, (res) => { res.resume(); resolve(res.headers); }).end();
+  });
+  assert.ok(Number(raw["retry-after"]) >= 1);
+  delete process.env.TAB_UNITS_MAX;
+  resetTabQuota();
+  process.env.TAB_REQUESTS_PER_HOUR = "3";
+  for (let i = 0; i < 3; i++) assert.equal((await get(`/api/channel/${CH}/playlists`)).status, 200);
+  const r = await new Promise<{ status: number; wait: string }>((resolve) => {
+    request({ host: "127.0.0.1", port, path: `/api/channel/${CH}/playlists` }, (res) => { res.resume(); resolve({ status: res.statusCode ?? 0, wait: String(res.headers["retry-after"]) }); }).end();
+  });
+  assert.equal(r.status, 429);
+  assert.ok(Number(r.wait) >= 1 && Number(r.wait) <= 3600);
+});
+
+test("unknown playlist and channel ids are remembered for longer than the usual negative cache", async () => {
+  const fake = `/api/channel/${CH}/playlist/PL${"m".repeat(16)}`;
+  assert.equal((await get(fake)).status, 404);
+  const n = units();
+  assert.equal((await get(fake)).status, 404);
+  assert.equal(units(), n, "the second ask is free");
+  assert.equal((await get(`/api/channel/${OTHER}/about`)).status, 404);
+  const m = units();
+  assert.equal((await get(`/api/channel/${OTHER}/playlists`)).status, 404);
+  assert.equal(units(), m);
+});
+
+test("a playlist cached for one channel is never served under another", async () => {
+  assert.equal((await get(`/api/channel/${CH}/playlist/${PL}`)).status, 200); // warm
+  assert.equal((await get(`/api/channel/${CH2}/playlist/${PL}`)).status, 404);
+  assert.equal((await get(`/api/channel/${CH2}/playlist/${PL}?pageToken=I2`)).status, 404);
+  assert.equal((await get(`/api/channel/${CH}/playlist/${FOREIGN}`)).status, 404);
+});
+
+test("trailing slashes and empty segments are not routes", async () => {
+  assert.equal((await get(`/api/channel/${CH}/`)).status, 404);
+  assert.equal((await get(`/api/channel/${CH}/playlists/`)).status, 404);
+  assert.equal((await get(`/api/channel/${CH}/playlist/`)).status, 400);
+  assert.equal((await get(`/api/channel/${CH}//about`)).status, 404);
+  assert.equal((await get(`/api/channel/${CH}/playlist/${PL}/`)).status, 404);
+});
+
+test("the header route does not touch the uploads", async () => {
+  const r = await get(`/api/channel/${CH}/head`);
+  assert.equal(r.status, 200);
+  assert.equal(r.json.channel.title, "Tab Chan");
+  assert.equal(r.json.subscribed, false);
+  assert.equal(hit("playlistItems").length, 0);
+  for (const t of ["playlists", "shorts", "about"]) await get(`/api/channel/${CH}/${t}`);
+  assert.equal(hit("channels").filter((u) => u.searchParams.get("part")!.includes("snippet")).length <= 2, true, "the header lookup is cached");
+});
+
+test("about for a channel that vanished is a 404", async () => {
+  aboutGone = true;
+  assert.equal((await get(`/api/channel/${CH}/about`)).status, 404);
+});
+
+test("only first pages are written to the database", async () => {
+  await get(`/api/channel/${CH}/playlists`);
+  await get(`/api/channel/${CH}/playlists?pageToken=P2`);
+  await get(`/api/channel/${CH}/playlist/${PL}`);
+  await get(`/api/channel/${CH}/playlist/${PL}?pageToken=I2`);
+  const keys = (getDb().prepare("SELECT key FROM cache WHERE key LIKE 'chplaylists:%' OR key LIKE 'plitems:%'").all() as { key: string }[]).map((r) => r.key);
+  assert.deepEqual(keys.sort(), [`chplaylists:${CH}:`, `plitems:${PL}:`]);
 });

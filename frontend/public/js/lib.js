@@ -15,11 +15,32 @@ export async function api(path, init) {
   return body;
 }
 
-const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
+// A channel URL's tab, playlist and page token: the same allowlists as the backend's (a test keeps the playlist id pattern in step).
+export const TABS = ["videos", "playlists", "shorts", "live", "about"];
+const LIST_ID = /^(?:PL[\w-]{16,32}|UU[\w-]{22}|OL[\w-]{20,40}|FL[\w-]{22}|LL[\w-]{22})$/, TOKEN = /^[\w-]{1,120}$/;
+export function channelParams(q) {
+  const tab = TABS.includes(q.get("tab")) ? q.get("tab") : "videos";
+  return { tab, list: tab === "playlists" && LIST_ID.test(q.get("list")) ? q.get("list") : "", pageToken: TOKEN.test(q.get("pageToken")) ? q.get("pageToken") : "" };
+}
+export function channelHref(id, { tab = "videos", list = "", pageToken = "" } = {}) {
+  const q = new URLSearchParams();
+  if (tab !== "videos") q.set("tab", tab);
+  if (list) q.set("list", list);
+  if (pageToken) q.set("pageToken", pageToken);
+  return `/channel/${encodeURIComponent(id)}${q.size ? `?${q}` : ""}`;
+}
+// The two API requests a channel page makes: the header (never the uploads, except for the Videos tab) and the tab's data.
+export function channelRequests(id, { tab, list, pageToken }) {
+  const base = `/api/channel/${encodeURIComponent(id)}`, tok = pageToken ? `?${new URLSearchParams({ pageToken })}` : "";
+  if (tab === "videos") return { head: `${base}${tok}`, body: null };
+  return { head: `${base}/head`, body: `${base}/${tab === "playlists" && list ? `playlist/${encodeURIComponent(list)}` : tab}${tok}` };
+}
+
+const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})(?:\?([^#]*))?$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
 const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"], ["/tv", "/tv"]]);
 export function destination(next) {
   const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
-  return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
+  return w ? "/watch?v=" + w[1] : c ? channelHref(c[1], channelParams(new URLSearchParams(c[2]))) : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
 }
 
 const login = document.getElementById("login");
@@ -30,7 +51,6 @@ export const clone = (id) => document.getElementById(id).content.firstElementChi
 export const safeImg = (u) => (typeof u === "string" && u.startsWith("https://") ? u : "");
 
 export const watchHref = (id, extra = "") => `/watch?v=${encodeURIComponent(id)}${extra}`;
-export const channelHref = (id) => `/channel/${encodeURIComponent(id)}`;
 export const thumbUrl = (id, size = "mqdefault") => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/${size}.jpg`;
 
 export async function run(main) {

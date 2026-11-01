@@ -7,6 +7,11 @@ import io.github.dodwmd.ytclassic.data.Chunk
 import io.github.dodwmd.ytclassic.data.PageState
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.joinParts
+import io.github.dodwmd.ytclassic.data.webLinks
+import io.github.dodwmd.ytclassic.ui.PagedList
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import io.github.dodwmd.ytclassic.data.liveLabel
 import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
@@ -20,6 +25,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private const val CH = "UCsBjURrPoezykLs9EqgamOA"
+private const val SPARSE = "UCssssssssssssssssssss"
 
 /** The channel tab calls, against responses captured from this repo's own backend with a stubbed Data API (src/test/resources/channel-*.json). */
 class ChannelTabsTest {
@@ -45,6 +51,8 @@ class ChannelTabsTest {
                 path == "/api/channel/$CH/shorts" -> 200 to fixture("channel-shorts")
                 path == "/api/channel/$CH/live" -> 200 to fixture("channel-live")
                 path == "/api/channel/$CH/about" -> 200 to fixture("channel-about")
+                path == "/api/channel/$SPARSE/playlists" -> 200 to fixture("channel-sparse-playlists")
+                path == "/api/channel/$SPARSE/shorts" -> 200 to fixture("channel-sparse-shorts")
                 path == "/api/channel/$CH/broken/x" -> 502 to """{"error":"Something went wrong talking to YouTube. Check the backend log."}"""
                 else -> 404 to """{"error":"not found"}"""
             }
@@ -137,10 +145,10 @@ class ChannelTabsTest {
         }
         var s = PageState<String>()
         assertFalse(s.canLoadMore)
-        s = s.begin().advance({ it }, fetch)
+        s = s.begin().advance({ it }, fetch = fetch)
         assertEquals(listOf("a", "b"), s.items)
         assertTrue(s.canLoadMore)
-        s = s.begin().advance({ it }, fetch)
+        s = s.begin().advance({ it }, fetch = fetch)
         assertEquals(listOf("a", "b", "c"), s.items)
         assertFalse(s.canLoadMore)
         assertEquals(listOf(null, "T2"), tokens)
@@ -154,13 +162,13 @@ class ChannelTabsTest {
             tokens += t
             if (t != null && fail) throw ApiException("Can't reach the server") else if (t == null) page("a", next = "T2") else page("b")
         }
-        var s = PageState<String>().begin().advance({ it }, fetch)
-        s = s.begin().advance({ it }, fetch)
+        var s = PageState<String>().begin().advance({ it }, fetch = fetch)
+        s = s.begin().advance({ it }, fetch = fetch)
         assertEquals("Can't reach the server", s.error)
         assertEquals(listOf("a"), s.items)
         assertFalse(s.loading)
         fail = false
-        s = s.begin().advance({ it }, fetch)
+        s = s.begin().advance({ it }, fetch = fetch)
         assertNull(s.error)
         assertEquals(listOf("a", "b"), s.items)
         assertEquals(listOf(null, "T2", "T2"), tokens)
@@ -173,10 +181,10 @@ class ChannelTabsTest {
             assertNull(t)
             if (calls++ == 0) throw ApiException("boom") else page("a")
         }
-        var s = PageState<String>().begin().advance({ it }, fetch)
+        var s = PageState<String>().begin().advance({ it }, fetch = fetch)
         assertEquals("boom", s.error)
         assertFalse(s.started)
-        s = s.begin().advance({ it }, fetch)
+        s = s.begin().advance({ it }, fetch = fetch)
         assertEquals(listOf("a"), s.items)
         assertTrue(s.started)
     }
@@ -188,5 +196,76 @@ class ChannelTabsTest {
         assertFalse(s.begin().canLoadMore)
         assertTrue(s.begin().loading)
         assertNull(s.begin().error)
+    }
+
+    @Test
+    fun anUnexpectedExceptionBecomesAGenericMessageAndIsReported() = runBlocking {
+        val seen = mutableListOf<Exception>()
+        val s = PageState<String>().begin().advance({ it }, { seen += it }) { throw IllegalStateException("kaboom") }
+        assertEquals("Something went wrong.", s.error)
+        assertFalse(s.loading)
+        assertFalse(s.needsToken)
+        assertEquals(listOf("kaboom"), seen.map { it.message })
+        assertFalse(s.error!!.contains("kaboom"), "the details are not shown to the user")
+    }
+
+    @Test
+    fun aRejectedTokenIsFlaggedSoTheFooterCanOfferSettings() = runBlocking {
+        val s = PageState<String>().begin().advance({ it }, fetch = { throw AuthException(false) })
+        assertTrue(s.needsToken)
+        assertEquals("Server needs an access token: set it in Settings.", s.error)
+        assertFalse(s.begin().needsToken, "a retry clears it")
+    }
+
+    @Test
+    fun emptyIsOnlyFinalWhenThereIsNoNextPage() = runBlocking {
+        val sparse = PageState<String>().begin().advance({ it }, fetch = { page(next = "T2") })
+        assertTrue(sparse.items.isEmpty() && sparse.token != null && sparse.canLoadMore, "a scan that found nothing yet still offers Load more")
+        val end = sparse.begin().advance({ it }, fetch = { page() })
+        assertTrue(end.items.isEmpty() && end.token == null && end.started)
+    }
+
+    @Test
+    fun webLinksKeepsOnlyWebAddresses() {
+        val kept = webLinks(listOf("https://example.com/a", "HTTPS://Example.COM/B", " http://example.org ", "https://example.com/a"))
+        assertEquals(listOf("https://example.com/a", "https://example.com/B", "http://example.org/"), kept)
+        for (bad in listOf("javascript:alert(1)", "intent://x#Intent;scheme=http;end", "ftp://example.com/f", "file:///etc/passwd", "content://x/y", "", "   ", "https://", "//example.com", "example.com", "market://details?id=x")) {
+            assertEquals(emptyList(), webLinks(listOf(bad)), bad)
+        }
+    }
+
+    @Test
+    fun loadIgnoresCallsWhileARequestIsRunning() = runBlocking {
+        var calls = 0
+        val gate = CompletableDeferred<Unit>()
+        val list = PagedList(CoroutineScope(Dispatchers.Unconfined), { s: String -> s }) { t ->
+            calls++
+            gate.await()
+            Chunk(listOf(if (t == null) "a" else "b"), "T")
+        }
+        list.load(); list.load(); list.load()
+        assertEquals(1, calls, "taps while loading start nothing")
+        assertTrue(list.state.loading)
+        gate.complete(Unit)
+        assertEquals(listOf("a"), list.state.items)
+        assertFalse(list.state.loading)
+        list.load()
+        assertEquals(2, calls)
+        assertEquals(listOf("a", "b"), list.state.items)
+    }
+
+    @Test
+    fun sparseItemsParseWithDefaults() = runBlocking {
+        val p = api.channelPlaylists(SPARSE)
+        assertEquals(2, p.items.size)
+        assertNull(p.items[0].itemCount)
+        assertEquals("", p.items[0].thumb)
+        assertEquals("", p.items[0].description)
+        val shorts = api.channelTab(SPARSE, "shorts")
+        assertNull(shorts.items[0].durationSeconds)
+        assertEquals("", shorts.items[0].thumb)
+        assertEquals("", shorts.items[0].channelTitle)
+        assertNull(shorts.items[0].live)
+        assertNull(shorts.nextPageToken)
     }
 }

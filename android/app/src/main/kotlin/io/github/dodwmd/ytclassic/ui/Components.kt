@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
@@ -82,5 +84,5 @@ fun VideoRow(
 
 @Composable
 fun SectionTitle(text: String, modifier: Modifier = Modifier) {
-    Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp))
+    Text(text, fontWeight = FontWeight.Bold, fontSize = 15.sp, modifier = modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp).semantics { heading() })
 }

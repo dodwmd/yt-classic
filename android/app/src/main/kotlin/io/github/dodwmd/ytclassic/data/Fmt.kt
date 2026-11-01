@@ -1,5 +1,6 @@
 package io.github.dodwmd.ytclassic.data
 
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.text.NumberFormat
 import java.time.OffsetDateTime
 import java.util.Locale
@@ -46,6 +47,10 @@ fun liveLabel(live: String?): String = when (live) {
     "ended" -> "Past stream"
     else -> ""
 }
+
+/** The links of a channel's About that are safe to open: web addresses only (any case of http/https), normalised; everything else is dropped. */
+fun webLinks(links: List<String>): List<String> =
+    links.mapNotNull { runCatching { it.trim().toHttpUrlOrNull()?.takeIf { u -> u.host.isNotEmpty() }?.toString() }.getOrNull() }.distinct()
 
 fun joinParts(vararg parts: String?): String = parts.filter { !it.isNullOrEmpty() }.joinToString(" · ")
 

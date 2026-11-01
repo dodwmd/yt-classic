@@ -10,6 +10,19 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.heading
+import android.util.Log
+import android.widget.Toast
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.dodwmd.ytclassic.data.SearchPage
+import io.github.dodwmd.ytclassic.data.webLinks
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -50,7 +63,7 @@ import kotlinx.coroutines.launch
 /** A lazily loaded, paged list. [load] fetches the next page and ignores calls while a request is running. */
 class PagedList<T>(
     private val scope: CoroutineScope,
-    private val idOf: (T) -> String,
+    val idOf: (T) -> String,
     initial: PageState<T> = PageState(),
     private val fetch: suspend (String?) -> Chunk<T>,
 ) {
@@ -61,104 +74,109 @@ class PagedList<T>(
         if (state.loading) return
         state = state.begin()
         val running = state
-        scope.launch { state = running.advance(idOf, fetch) }
+        scope.launch { state = running.advance(idOf, { Log.e("YtClassic", "channel tab load failed", it) }, fetch) }
     }
 }
 
-@Composable
-private fun <T> rememberPaged(vararg keys: Any?, idOf: (T) -> String, initial: PageState<T> = PageState(), fetch: suspend (String?) -> Chunk<T>): PagedList<T> {
-    val scope = rememberCoroutineScope()
-    return remember(*keys) { PagedList(scope, idOf, initial, fetch) }
+/**
+ * What a channel screen has loaded, kept by the back stack entry: a round trip to a video (or a rotation) finds every tab
+ * as it was. After process death the entry is restored but this is not, so tabs reload (from the server's cache); the
+ * selected tab and scroll positions are saved by the screen itself.
+ */
+class ChannelModel(private val api: YtApi, private val id: String) : ViewModel() {
+    private var firstUploads: PagedList<VideoSummary>? = null
+    fun uploads(first: SearchPage) = firstUploads ?: PagedList(viewModelScope, { v: VideoSummary -> v.id }, PageState(first.items, first.nextPageToken, started = true)) { t ->
+        api.channel(id, t).page.let { Chunk(it.items, it.nextPageToken) }
+    }.also { firstUploads = it }
+    val playlists = PagedList(viewModelScope, { p: ChannelPlaylist -> p.id }) { t -> api.channelPlaylists(id, t).let { Chunk(it.items, it.nextPageToken) } }
+    val shorts = PagedList(viewModelScope, { v: VideoSummary -> v.id }) { t -> api.channelTab(id, "shorts", t).let { Chunk(it.items, it.nextPageToken) } }
+    val live = PagedList(viewModelScope, { v: VideoSummary -> v.id }) { t -> api.channelTab(id, "live", t).let { Chunk(it.items, it.nextPageToken) } }
+    val about = PagedList(viewModelScope, { a: ChannelAbout -> a.id }) { Chunk(listOf(api.channelAbout(id)), null) }
 }
 
 private val TAB_NAMES = listOf("Videos", "Playlists", "Shorts", "Live", "About")
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit, onPlaylist: (String) -> Unit) {
+    val model = viewModel<ChannelModel>(key = "channel:$id", factory = viewModelFactory { initializer { ChannelModel(api, id) } })
+    // Above the load, so a Retry of a failed header load keeps the tab; saved across rotation and process death.
+    var tab by rememberSaveable(id) { mutableIntStateOf(0) }
+    val listStates = TAB_NAMES.map { rememberLazyListState() } // one scroll position per tab
     val loaded = rememberLoad(id) { api.channel(id) }
     LoadedContent(loaded) { c ->
         var subscribed by remember(c) { mutableStateOf(c.subscribed) }
         var busy by remember(c) { mutableStateOf(false) }
         var failure by remember(c) { mutableStateOf<String?>(null) }
-        // Survives rotation and process death; each tab loads the first time it is opened and keeps its pages after that.
-        var tab by rememberSaveable(id) { mutableIntStateOf(0) }
         val scope = rememberCoroutineScope()
-        val videoId = { v: VideoSummary -> v.id }
-        val uploads = rememberPaged(c, idOf = videoId, initial = PageState(c.page.items, c.page.nextPageToken, started = true)) { t ->
-            api.channel(id, t).page.let { Chunk(it.items, it.nextPageToken) }
-        }
-        val playlists = rememberPaged(c, idOf = { p: ChannelPlaylist -> p.id }) { t -> api.channelPlaylists(id, t).let { Chunk(it.items, it.nextPageToken) } }
-        val shorts = rememberPaged(c, idOf = videoId) { t -> api.channelTab(id, "shorts", t).let { Chunk(it.items, it.nextPageToken) } }
-        val live = rememberPaged(c, idOf = videoId) { t -> api.channelTab(id, "live", t).let { Chunk(it.items, it.nextPageToken) } }
-        val about = rememberPaged(c, idOf = { a: ChannelAbout -> a.id }) { Chunk(listOf(api.channelAbout(id)), null) }
-        val videoLists = listOf(uploads, null, shorts, live, null)
-        val current = videoLists[tab]
+        val uploads = model.uploads(c.page)
+        val pages = listOf(uploads, model.playlists, model.shorts, model.live, model.about)
+        val keys = listOf("v", "p", "s", "l", "a")
         LaunchedEffect(tab) {
-            val p = when (tab) { 1 -> playlists; 2 -> shorts; 3 -> live; 4 -> about; else -> null }
-            if (p != null && !p.state.started && !p.state.loading && p.state.error == null) p.load()
+            val p = pages[tab]
+            if (!p.state.started && !p.state.loading && p.state.error == null) p.load()
         }
-        val videoItems = current?.state?.items.orEmpty()
+        val videoItems = if (tab == 0) uploads.state.items else if (tab == 2) model.shorts.state.items else if (tab == 3) model.live.state.items else emptyList()
         val watched = rememberWatched(api, videoItems.map { it.id })
         val later = rememberLater(api, videoItems.map { it.id })
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-            item {
-                Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(c.channel.title, style = MaterialTheme.typography.titleLarge)
-                        c.channel.subscribers?.toLongOrNull()?.let { Text("%,d subscribers".format(it), color = Muted) }
-                    }
-                    Button(enabled = !busy, onClick = {
-                        busy = true
-                        scope.launch {
-                            try {
-                                subscribed = api.setSubscribed(c.channel.id, !subscribed)
-                                failure = null
-                            } catch (e: ApiException) {
-                                failure = e.message
-                            } finally {
-                                busy = false
-                            }
-                        }
-                    }) { Text(if (subscribed) "Unsubscribe" else "Subscribe") }
+        Column {
+            Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(c.channel.title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() })
+                    c.channel.subscribers?.toLongOrNull()?.let { Text("%,d subscribers".format(it), color = Muted) }
                 }
-                failure?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp).semantics { liveRegion = LiveRegionMode.Polite }) }
-                // Tab semantics (role and selected state) come from Material's Tab; its minimum height is 48dp.
-                PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
-                    TAB_NAMES.forEachIndexed { i, name ->
-                        Tab(selected = tab == i, onClick = { tab = i }, text = { Text(name) })
+                Button(enabled = !busy, onClick = {
+                    busy = true
+                    scope.launch {
+                        try {
+                            subscribed = api.setSubscribed(c.channel.id, !subscribed)
+                            failure = null
+                        } catch (e: ApiException) {
+                            failure = e.message
+                        } finally {
+                            busy = false
+                        }
                     }
+                }) { Text(if (subscribed) "Unsubscribe" else "Subscribe") }
+            }
+            failure?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp).semantics { liveRegion = LiveRegionMode.Polite }) }
+            // Always visible above the list. Tab semantics (role and selected state) come from Material's Tab; its minimum height is 48dp.
+            PrimaryScrollableTabRow(selectedTabIndex = tab, edgePadding = 0.dp) {
+                TAB_NAMES.forEachIndexed { i, name ->
+                    Tab(selected = tab == i, onClick = { tab = i }, text = { Text(name) })
                 }
             }
-            when (tab) {
-                1 -> {
-                    pagedRows(playlists, "No public playlists.") { p -> PlaylistRow(p) { onPlaylist(p.id) } }
-                }
-                4 -> {
-                    pagedRows(about, "Nothing to show.") { a -> AboutContent(a) }
-                }
-                else -> {
-                    val list = current!!
-                    pagedRows(list, if (tab == 2) "No Shorts." else if (tab == 3) "No live streams." else "No uploads.") { v -> SummaryRow(v, onVideo, v.id in watched, later) }
+            LazyColumn(state = listStates[tab], contentPadding = PaddingValues(bottom = 24.dp)) {
+                when (tab) {
+                    1 -> pagedRows(model.playlists, keys[tab], "No public playlists.") { p -> PlaylistRow(p) { onPlaylist(p.id) } }
+                    4 -> pagedRows(model.about, keys[tab], "Nothing to show.") { a -> AboutContent(a) }
+                    else -> {
+                        val list = if (tab == 0) uploads else if (tab == 2) model.shorts else model.live
+                        pagedRows(list, keys[tab], if (tab == 2) "No Shorts." else if (tab == 3) "No live streams." else "No uploads.") { v -> SummaryRow(v, onVideo, v.id in watched, later) }
+                    }
                 }
             }
         }
     }
 }
 
-/** The rows of [list] followed by its footer: spinner, error with Retry, "Load more", or the empty note. */
-private fun <T> LazyListScope.pagedRows(list: PagedList<T>, empty: String, row: @Composable (T) -> Unit) {
+/** The rows of [list] followed by its footer: spinner, error with Retry (and Open Settings for a token problem), "Load more", or the empty note. */
+private fun <T> LazyListScope.pagedRows(list: PagedList<T>, prefix: String, empty: String, row: @Composable (T) -> Unit) {
     val s = list.state
-    items(s.items.size) { row(s.items[it]) }
-    item(key = "footer") {
+    items(s.items.size, key = { "$prefix:${list.idOf(s.items[it])}" }, contentType = { prefix }) { row(s.items[it]) }
+    item(key = "$prefix:footer", contentType = "footer") {
         Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             if (s.loading) CircularProgressIndicator(Modifier.semantics { contentDescription = "Loading" })
             s.error?.let {
                 Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                if (s.needsToken) {
+                    val openSettings = LocalOpenSettings.current
+                    Button(onClick = openSettings) { Text("Open Settings") }
+                }
                 OutlinedButton(onClick = { list.load() }, enabled = !s.loading) { Text("Retry") }
             }
             if (s.canLoadMore && s.error == null) OutlinedButton(onClick = { list.load() }) { Text("Load more") }
-            if (s.started && s.items.isEmpty() && s.error == null) Text(empty, color = Muted)
+            // Only the end of the list is "nothing": a scan that found no match so far still has a next page to try.
+            if (s.started && s.items.isEmpty() && s.error == null && s.token == null && !s.loading) Text(empty, color = Muted)
         }
     }
 }
@@ -172,8 +190,9 @@ private fun PlaylistRow(p: ChannelPlaylist, onClick: () -> Unit) = VideoRow(
 @Composable
 private fun AboutContent(a: ChannelAbout) {
     val uri = LocalUriHandler.current
+    val context = LocalContext.current
     Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(a.description.ifBlank { "No description." })
+        SelectionContainer { Text(a.description.ifBlank { "No description." }) }
         val facts = listOf(
             "Handle" to a.customUrl,
             "Joined" to a.publishedAt?.take(10),
@@ -188,31 +207,45 @@ private fun AboutContent(a: ChannelAbout) {
                 Text(v, modifier = Modifier.weight(0.6f))
             }
         }
-        for (link in a.links.filter { it.startsWith("https://") || it.startsWith("http://") }) {
+        for (link in webLinks(a.links)) {
             Text(
                 link, color = LinkBlue,
                 modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                    .clickable(role = Role.Button, onClickLabel = "Open link") { runCatching { uri.openUri(link) } }
+                    .clickable(role = Role.Button, onClickLabel = "Open $link") {
+                        try {
+                            uri.openUri(link)
+                        } catch (_: Exception) { // no app to open it, or the system refused
+                            Toast.makeText(context, "Can't open this link", Toast.LENGTH_SHORT).show()
+                        }
+                    }
                     .padding(vertical = 12.dp),
             )
         }
     }
 }
 
+/** What one channel playlist screen has loaded; see [ChannelModel]. */
+class ChannelPlaylistModel(private val api: YtApi, private val id: String, private val playlistId: String) : ViewModel() {
+    private var list: PagedList<VideoSummary>? = null
+    fun videos(first: SearchPage) = list ?: PagedList(viewModelScope, { v: VideoSummary -> v.id }, PageState(first.items, first.nextPageToken, started = true)) { t ->
+        api.channelPlaylist(id, playlistId, t).page.let { Chunk(it.items, it.nextPageToken) }
+    }.also { list = it }
+}
+
 /** One of the channel's playlists: its videos (Load more for the rest). Nothing plays on its own. */
 @Composable
 fun ChannelPlaylistScreen(api: YtApi, id: String, playlistId: String, onVideo: (String) -> Unit) {
+    val model = viewModel<ChannelPlaylistModel>(key = "channel:$id:$playlistId", factory = viewModelFactory { initializer { ChannelPlaylistModel(api, id, playlistId) } })
+    val listState = rememberLazyListState()
     val first = rememberLoad(id, playlistId) { api.channelPlaylist(id, playlistId) }
     LoadedContent(first) { r ->
-        val list = rememberPaged(r, idOf = { v: VideoSummary -> v.id }, initial = PageState(r.page.items, r.page.nextPageToken, started = true)) { t ->
-            api.channelPlaylist(id, playlistId, t).page.let { Chunk(it.items, it.nextPageToken) }
-        }
+        val list = model.videos(r.page)
         val items = list.state.items
         val watched = rememberWatched(api, items.map { it.id })
         val later = rememberLater(api, items.map { it.id })
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             item { SectionTitle(r.playlist.title) }
-            pagedRows(list, "This playlist has no videos you can see.") { v -> SummaryRow(v, onVideo, v.id in watched, later) }
+            pagedRows(list, "pl", "This playlist has no videos you can see.") { v -> SummaryRow(v, onVideo, v.id in watched, later) }
         }
     }
 }

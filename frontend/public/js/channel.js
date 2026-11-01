@@ -1,15 +1,9 @@
-import { $, api, cardNode, clone, markWatched, run, safeImg, setTitle, thumbUrl } from "./lib.js";
-import { formatViews, join, timeAgo } from "./fmt.js";
+import { $, TABS, api, cardNode, channelHref, channelParams, channelRequests, clone, markWatched, run, safeImg, setTitle, thumbUrl } from "./lib.js";
+import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 const id = decodeURIComponent(location.pathname.split("/")[2] ?? "");
-const q = new URLSearchParams(location.search);
-const token = q.get("pageToken") ?? "";
-const TABS = ["videos", "playlists", "shorts", "live", "about"];
-const tab = TABS.includes(q.get("tab")) ? q.get("tab") : "videos";
-const list = /^[A-Za-z]{2}[\w-]{8,62}$/.test(q.get("list") ?? "") && tab === "playlists" ? q.get("list") : "";
-const base = `/api/channel/${encodeURIComponent(id)}`;
-const href = (params) => `/channel/${encodeURIComponent(id)}?${new URLSearchParams(params)}`;
-const withToken = (path) => (token ? `${path}${path.includes("?") ? "&" : "?"}${new URLSearchParams({ pageToken: token })}` : path);
+const { tab, list, pageToken: token } = channelParams(new URLSearchParams(location.search));
+const href = (params) => channelHref(id, params);
 const LIVE = { live: "Live now", upcoming: "Upcoming", ended: "Past stream" };
 
 function tabBar() {
@@ -24,11 +18,10 @@ function tabBar() {
 
 function videos(items, meta) {
   for (const v of items) {
-    $("#uploads").append(cardNode({ id: v.id, title: v.title, thumb: v.thumb || thumbUrl(v.id), duration: v.durationSeconds && formatSecondsShort(v.durationSeconds), meta: meta(v) }));
+    $("#uploads").append(cardNode({ id: v.id, title: v.title, thumb: v.thumb || thumbUrl(v.id), duration: v.durationSeconds && formatSeconds(v.durationSeconds), meta: meta(v) }));
   }
   markWatched();
 }
-const formatSecondsShort = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 
 function playlists(items) {
   for (const p of items) {
@@ -43,6 +36,7 @@ function playlists(items) {
 }
 
 function about(a) {
+  if (!a) return void ($("#empty").hidden = false);
   $("#aboutbox").hidden = false;
   $("#about").textContent = a.description || "No description.";
   const day = a.publishedAt ? new Date(a.publishedAt).toISOString().slice(0, 10) : "";
@@ -65,10 +59,10 @@ function about(a) {
 }
 
 run(async () => {
-  const head = api(base);
-  const body = tab === "playlists" ? api(withToken(list ? `${base}/playlist/${encodeURIComponent(list)}` : `${base}/playlists`)) : tab === "videos" ? null : api(withToken(`${base}/${tab}`));
-  const { channel: c, page: first, subscribed } = await head;
-  const data = await (body ?? { page: first });
+  const req = channelRequests(id, { tab, list, pageToken: token });
+  // Both requests start together and both are always awaited, so a failure in one never leaves the other unhandled.
+  const [head, data] = await Promise.all([api(req.head), req.body ? api(req.body) : null]);
+  const { channel: c, subscribed } = head;
 
   setTitle(c.title);
   $("#channel").hidden = false;
@@ -105,7 +99,7 @@ run(async () => {
     }
   });
 
-  const page = data.page;
+  const page = data ? data.page : head.page;
   $("#sect").textContent = list ? data.playlist.title : tab === "videos" ? "Uploads" : $("#tabs [aria-current]").textContent;
   if (list) {
     $("#sect").prepend(Object.assign(document.createElement("a"), { textContent: "Playlists › ", href: href({ tab: "playlists" }) }));

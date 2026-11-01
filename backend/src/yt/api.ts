@@ -1,4 +1,5 @@
-import { cached } from "../cache.ts";
+import { cached, isCached } from "../cache.ts";
+import { spend } from "../tabquota.ts";
 import { isoSeconds } from "../format.ts";
 import { fetchT } from "../http.ts";
 
@@ -147,6 +148,7 @@ export async function channelVideos(channelId: string, pageToken = ""): Promise<
   return cached(`chvideos:${channelId}:${pageToken}`, TEN_MIN, async () => {
     const params: Record<string, string> = { part: "snippet", playlistId: "UU" + channelId.slice(2), maxResults: "24" };
     if (pageToken) params.pageToken = pageToken;
+    if (pageToken) spend(1); // minted tokens are client-chosen: later pages count against the tab budget
     const data = await call("playlistItems", params); // 1 unit
     const items: VideoSummary[] = (data.items ?? []).map((i: any) => ({
       id: i.snippet.resourceId.videoId,
@@ -158,13 +160,17 @@ export async function channelVideos(channelId: string, pageToken = ""): Promise<
       thumb: i.snippet.thumbnails?.medium?.url ?? `https://i.ytimg.com/vi/${i.snippet.resourceId.videoId}/mqdefault.jpg`,
     }));
     return { items, nextPageToken: data.nextPageToken, prevPageToken: data.prevPageToken };
-  }, true);
+  }, !pageToken);
 }
 
 // --- Channel tabs ---------------------------------------------------------------------------------------------
 
 /** A public playlist id as the Data API hands them out (PL..., OL..., UU..., FL...): strict, so nothing odd reaches the API. */
-export const YT_PLAYLIST_ID = /^[A-Za-z]{2}[\w-]{8,62}$/;
+export const YT_PLAYLIST_ID = /^(?:PL[\w-]{16,32}|UU[\w-]{22}|OL[\w-]{20,40}|FL[\w-]{22}|LL[\w-]{22})$/;
+/** Page tokens are opaque; this is the alphabet the Data API uses. */
+export const PAGE_TOKEN = /^[\w-]{1,120}$/;
+/** Fake ids are remembered this long (a repeat costs nothing); a real answer lives as long as its own TTL. */
+const MISSING_TTL = 10 * 60_000;
 
 export interface PlaylistSummary {
   id: string;
@@ -209,6 +215,7 @@ const WANT_ITEMS = 12;
 async function playlistItemsPage(playlistId: string, pageToken: string, maxResults: number): Promise<any> {
   const params: Record<string, string> = { part: "snippet", playlistId, maxResults: String(maxResults) };
   if (pageToken) params.pageToken = pageToken;
+  spend(1);
   try {
     return await call("playlistItems", params); // 1 unit
   } catch (e) {
@@ -224,6 +231,7 @@ export function channelPlaylists(channelId: string, pageToken = ""): Promise<Pla
   return cached(`chplaylists:${channelId}:${pageToken}`, 30 * 60_000, async () => {
     const params: Record<string, string> = { part: "snippet,contentDetails", channelId, maxResults: "24" };
     if (pageToken) params.pageToken = pageToken;
+    spend(1);
     const data = await call("playlists", params); // 1 unit
     const items: PlaylistSummary[] = (data.items ?? []).map((p: any) => ({
       id: p.id,
@@ -234,16 +242,20 @@ export function channelPlaylists(channelId: string, pageToken = ""): Promise<Pla
       publishedAt: p.snippet?.publishedAt ?? "",
     }));
     return { items, nextPageToken: data.nextPageToken };
-  }, true);
+  }, !pageToken); // only first pages are kept on disk: minted tokens must not fill the database
 }
 
 /** The playlist's title if it belongs to this channel, else null (so the route can't be used to browse other people's playlists). */
-export function ownedPlaylist(channelId: string, playlistId: string): Promise<{ id: string; title: string } | null> {
-  return cached(`chplaylist:${playlistId}`, HOUR, async () => {
+export async function ownedPlaylist(channelId: string, playlistId: string): Promise<{ id: string; title: string } | null> {
+  // The answer is cached by playlist id alone, but only ever used after comparing its owner with the channel asked about.
+  const p = await cached(`chplaylist:${playlistId}`, HOUR, async () => {
+    spend(1);
     const data = await call("playlists", { part: "snippet", id: playlistId }); // 1 unit
-    const p = data.items?.[0];
-    return p ? { id: p.id, title: p.snippet?.title ?? "", channelId: p.snippet?.channelId ?? "" } : null;
-  }, true).then((p: any) => (p && p.channelId === channelId ? { id: p.id, title: p.title } : null));
+    const x = data.items?.[0];
+    // An unknown id is an object too, so it is remembered for MISSING_TTL instead of the brief negative-cache time.
+    return x ? { id: x.id, title: x.snippet?.title ?? "", owner: x.snippet?.channelId ?? "" } : { id: "", title: "", owner: "" };
+  }, true);
+  return p.id && p.owner === channelId ? { id: p.id, title: p.title } : null;
 }
 
 export function playlistVideos(channelId: string, playlistId: string, pageToken = ""): Promise<SearchPage> {
@@ -261,7 +273,7 @@ export function playlistVideos(channelId: string, playlistId: string, pageToken 
         thumb: thumbOf(i.snippet, i.snippet.resourceId.videoId),
       }));
     return { items, nextPageToken: data.nextPageToken };
-  }, true);
+  }, !pageToken);
 }
 
 /** One uploads page (50 videos) with durations and live state: 2 quota units, shared by the Shorts and Live tabs. */
@@ -272,6 +284,7 @@ function scannedUploads(channelId: string, pageToken: string): Promise<TabPage> 
     const ids: string[] = base.map((i: any) => i.snippet.resourceId.videoId);
     const details = new Map<string, any>();
     if (ids.length) {
+      spend(1);
       const d = await call("videos", { part: "contentDetails,liveStreamingDetails,snippet", id: ids.join(",") }); // 1 unit for up to 50 ids
       for (const v of d.items ?? []) details.set(v.id, v);
     }
@@ -295,6 +308,14 @@ function scannedUploads(channelId: string, pageToken: string): Promise<TabPage> 
       });
     }
     return { items, nextPageToken: data.nextPageToken };
+  });
+}
+
+/** The channel lookup for the tab routes. A miss costs a unit (unless channel() already holds it) and unknown ids are remembered for 10 minutes. */
+export function tabChannel(id: string): Promise<{ channel: Channel | null }> {
+  return cached(`tabchan:${id}`, MISSING_TTL, async () => {
+    if (!isCached(`channel:${id}`)) spend(1);
+    return { channel: await channel(id) };
   });
 }
 
@@ -330,6 +351,7 @@ export function descriptionLinks(text: string): string[] {
 
 export function channelAbout(id: string): Promise<ChannelAbout | null> {
   return cached(`chabout:${id}`, HOUR, async () => {
+    spend(1);
     const data = await call("channels", { part: "snippet,statistics,brandingSettings", id }); // 1 unit
     const c = data.items?.[0];
     if (!c) return null;
