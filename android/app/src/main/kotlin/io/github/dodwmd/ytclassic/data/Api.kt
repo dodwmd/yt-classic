@@ -28,6 +28,9 @@ class AuthException(val tokenSet: Boolean) : ApiException(
     if (tokenSet) "The server rejected the access token: check it in Settings." else "Server needs an access token: set it in Settings.",
 )
 
+/** TV needs more subscriptions than the user has ([have] of [need]); [message] says how many more. */
+class NeedSubscriptionsException(message: String, val have: Int, val need: Int) : ApiException(message)
+
 /** Outcome of the Settings connection test. */
 enum class ServerCheck(val message: String) {
     Ok("Connected"),
@@ -92,6 +95,10 @@ class YtApi(
         get("api/channel/$id", "pageToken" to pageToken)
 
     suspend fun status(): StatusResponse = get("api/status")
+
+    /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */
+    suspend fun tvNext(after: String, seen: List<String>): TvResponse =
+        get("api/tv/next", "after" to after.ifEmpty { null }, "seen" to seen.joinToString(",").ifEmpty { null })
 
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         val body = FormBody.Builder().add("id", channelId).build()
@@ -243,8 +250,9 @@ class YtApi(
         val text = it.body.string()
         if (it.code == 401) throw AuthException(token().isNotBlank())
         if (!it.isSuccessful) {
-            val message = runCatching { ApiJson.decodeFromString<ApiError>(text).error }.getOrDefault("")
-            throw ApiException(message.ifBlank { "Request failed (${it.code})" })
+            val error = runCatching { ApiJson.decodeFromString<ApiError>(text) }.getOrDefault(ApiError())
+            if (it.code == 409 && error.code == "need-subscriptions") throw NeedSubscriptionsException(error.error.ifBlank { "Subscribe to more channels to turn on TV." }, error.have, error.need)
+            throw ApiException(error.error.ifBlank { "Request failed (${it.code})" })
         }
         try {
             ApiJson.decodeFromString(ApiJson.serializersModule.serializer<T>(), text)

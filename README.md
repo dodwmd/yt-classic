@@ -34,6 +34,7 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   `/playlists?id=N` shows one (max 500 videos) with Remove, Move to top and Play, which opens the first video; there
   is no auto-advance. Title, channel and duration are copied from the server's own lookup, never from the client.
   The Android app has the same: a Watch later toggle on rows and the watch screen, Playlists and playlist screens.
+- **TV mode**: lean-back playback from your subscriptions; see [TV mode](#tv-mode). Masthead "TV" on the web, "TV" on the Android home screen.
 - **Channel pages**: banner, uploads grid, Subscribe/Unsubscribe (stored locally, no Google login).
 - **Audio language**: prefers English audio on auto-dubbed videos; override per video with `?a=pt`.
 
@@ -50,8 +51,8 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
-  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
-- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `playlists.html`, `login.html`, the CSS,
+  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/tv/next`, `GET /api/tv/status`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
+- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `playlists.html`, `tv.html`, `login.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
 - **Playback:** YouTube no longer offers a single file with audio and video together, so the backend takes the
@@ -497,6 +498,29 @@ Run the same checks locally with `nix-shell --run 'cd backend && npm run check &
 
 `main` is protected: changes go through a pull request, and the CI jobs must pass before merging.
 
+### TV mode
+
+One video plays, and when it ends the next one starts: no prompts, no choices, no recommendations. The rules:
+
+- Videos come from your **subscribed channels only**. Each pick is random: a random channel, then a random video from its
+  recent uploads (the cached RSS feed, the last ~15).
+- **Never two videos in a row from the same channel.**
+- TV needs **at least 5 subscriptions**. Below that the TV entry is greyed ("Subscribe to N more channels to turn on TV")
+  and the server answers 409. If you unsubscribe below 5 while TV runs, the current video finishes and TV then stops with a message.
+- Skipped: Shorts (under 61 s), live and upcoming streams, videos without a duration, and anything that cannot be looked up.
+  Videos already watched to the end (history) are left out too, and only used again if every examined channel has nothing
+  unwatched left. The last ~50 played ids are never repeated.
+- **Skip** and **Stop** are the only controls (plus the normal player). After 3 failures in a row TV stops with a message.
+- Web: `/tv` (masthead "TV"). Android: "TV" on Home; keeps playing from video to video with the screen off (the
+  notification shows the current video) and fullscreen carries over. Progress is reported to the history as usual.
+
+`GET /api/tv/next?after=<channelId>&seen=<id,id,...>` is stateless: `after` is the channel that just played, `seen` the
+recently played ids (at most 100 ids / 1200 characters are read). It returns the `/api/video/:id` shape without `related`, plus
+`channelId`; `409 {error, code:"need-subscriptions", have, need:5}` below 5 subscriptions; `404 {code:"nothing-playable"}`
+when nothing was found within the bounded attempts (at most 6 channels and 5 videos per channel are examined per
+pass, each video check costs one cached Data API unit). `GET /api/tv/status` returns `{have, need, ok}` (the masthead uses it).
+Code: `backend/src/tv.ts` (pure picker with an injectable `rand`), `frontend/public/js/tv.js`, Android `player/TvSession.kt`, `ui/Tv.kt`.
+
 ## Project layout
 
 ```
@@ -513,6 +537,7 @@ backend/
   src/history.ts         watch history and resume positions (SQLite)
   src/playlists.ts       Watch later and user playlists (SQLite)
   src/auth.ts            optional shared access token: bearer/cookie checks, constant-time compare, failure limiter
+  src/tv.ts              TV mode: the random, never-the-same-channel picker
   src/store.ts           subscriptions (SQLite, imports the old subscriptions.json; atomic bulk addSubs)
   src/subsio.ts          subscription import (Takeout CSV, OPML, URL list) and export parsers/writers
 frontend/

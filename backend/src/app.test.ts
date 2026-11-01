@@ -118,6 +118,19 @@ test("/api/home returns exactly the subscriptions and the feed (no suggestion ro
   assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["continue", "feed", "subs"]);
 });
 
+test("TV: the server enforces the five-subscription gate and validates input", async () => {
+  const status = JSON.parse((await get("/api/tv/status")).body);
+  assert.deepEqual(status, { have: 0, need: 5, ok: false });
+  const r = await get("/api/tv/next");
+  assert.equal(r.status, 409);
+  const body = JSON.parse(r.body);
+  assert.equal(body.code, "need-subscriptions");
+  assert.deepEqual([body.have, body.need], [0, 5]);
+  assert.match(body.error, /Subscribe to 5 more channels/);
+  assert.equal((await get("/api/tv/next?after=bad")).status, 400);
+  assert.equal((await get("/api/tv/next?seen=" + "A".repeat(5000))).status, 400);
+});
+
 test("search returns JSON with raw (unescaped) data; escaping is the frontend's job", async () => {
   const r = await get("/api/search?q=nix");
   assert.equal(r.status, 200);

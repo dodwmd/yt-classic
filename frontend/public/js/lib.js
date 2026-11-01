@@ -11,7 +11,7 @@ export async function api(path, init) {
     location.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
     return new Promise(() => {});
   }
-  if (!res.ok) throw new Error(body.error || `Request failed (${res.status})`);
+  if (!res.ok) throw Object.assign(new Error(body.error || `Request failed (${res.status})`), { code: body.code });
   return body;
 }
 
@@ -38,11 +38,44 @@ export async function run(main) {
   try {
     await main();
     status.hidden = true;
+    tvLink();
     fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {
     status.textContent = err.message || String(err);
     status.hidden = false;
   }
+}
+
+// The masthead's TV entry stays a link (the TV page explains), but is greyed and described when TV is not available yet.
+function tvLink() {
+  const a = $("#tvlink");
+  fetch("/api/tv/status").then((r) => r.json()).then((s) => {
+    if (!a || s.ok || !s.need) return;
+    a.setAttribute("aria-disabled", "true");
+    a.title = `Subscribe to ${s.need - s.have} more channel${s.need - s.have === 1 ? "" : "s"} to turn on TV`;
+  }).catch(() => {});
+}
+
+// Reports progress every 10 s while playing and on pause/end/leave, once something has really played.
+// ref.id is the video being reported (TV changes it between videos); returns send(finished).
+export function reportProgress(video, now, ref) {
+  let last = -1, played = false;
+  const send = (finished) => {
+    const position = Math.floor(now());
+    if (!played || (!finished && position === last)) return;
+    last = position;
+    const body = new URLSearchParams({ id: ref.id, position });
+    if (finished) body.set("finished", 1);
+    fetch("/api/progress", { method: "POST", body, keepalive: true }).catch(() => {});
+  };
+  setInterval(() => video.paused || send(), 10000);
+  video.addEventListener("playing", () => (played = true));
+  video.addEventListener("loadstart", () => (played = false));
+  video.addEventListener("pause", () => send());
+  video.addEventListener("ended", () => send(true));
+  addEventListener("pagehide", () => send());
+  document.addEventListener("visibilitychange", () => document.hidden && send());
+  return send;
 }
 
 export function setTitle(title) {

@@ -1,0 +1,21 @@
+{
+  "video": {
+    "id": "vid3x1zzzzz",
+    "title": "Video 3-1",
+    "channelId": "UC0000000000000000000003",
+    "channelTitle": "Channel 3",
+    "description": "d",
+    "publishedAt": "2026-10-01T00:00:00Z",
+    "thumb": "",
+    "durationSeconds": 120
+  },
+  "channelId": "UC0000000000000000000003",
+  "quality": 720,
+  "qualities": [
+    360,
+    480,
+    720,
+    1080
+  ],
+  "lang": ""
+}

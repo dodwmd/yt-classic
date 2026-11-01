@@ -40,9 +40,10 @@ class MainActivity : ComponentActivity() {
         }
         // Reopened from the media notification after the activity was gone: go back to the video that is playing.
         val playing = if (savedInstanceState == null && intent.getBooleanExtra(EXTRA_OPEN_PLAYING, false)) app.host.video?.id else null
+        val tvOn = playing != null && app.host.tv != null
         lifecycleScope.launch {
             preset?.let { app.settings.setServerUrl(it) } // persisted before any screen loads
-            setContent { ClassicTheme { AppNav(app, playing) } }
+            setContent { ClassicTheme { AppNav(app, playing, tvOn) } }
         }
     }
 

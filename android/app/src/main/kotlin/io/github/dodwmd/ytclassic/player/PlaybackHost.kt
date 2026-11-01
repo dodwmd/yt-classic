@@ -24,6 +24,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
 import io.github.dodwmd.ytclassic.data.AuthException
+import io.github.dodwmd.ytclassic.data.NeedSubscriptionsException
 import io.github.dodwmd.ytclassic.data.VideoDetail
 import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
@@ -85,6 +86,14 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     var finished by mutableStateOf(false)
         private set
 
+    /** The running TV session (lean-back playback from the subscriptions), or null. See [startTv]. */
+    var tv by mutableStateOf<TvSession?>(null)
+        private set
+    /** Why TV stopped by itself (too few subscriptions, repeated failures); shown on the TV screen until TV is started again. */
+    var tvMessage by mutableStateOf<String?>(null)
+        private set
+    private var advancing: Job? = null
+
     /** Set by MainActivity: true while the app is on screen. */
     var appVisible = false
     /** The "Keep playing in the background" setting, mirrored from DataStore. */
@@ -141,7 +150,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private val playIntent: Boolean get() = if (seek.restarting) pendingPlay else exo.playWhenReady
 
     /** Whether the user expects sound right now (not paused, not finished, not failed). */
-    val wantsToPlay: Boolean get() = video != null && error == null && !finished && playIntent
+    val wantsToPlay: Boolean get() = video != null && error == null && (!finished || tv != null) && playIntent
 
     init {
         // While playing, tell the server every 10 s. Runs on the app scope, so it also works with the screen off.
@@ -154,6 +163,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         exo.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 this@PlaybackHost.isPlaying = isPlaying
+                if (isPlaying) tv?.playing()
                 if (reportsOnPause(isPlaying, exo.playWhenReady, seek.restarting)) reportProgress() // paused or stopped
             }
 
@@ -187,13 +197,93 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
     fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
         if (video?.id == v.id) return
+        endTv() // the user chose a video themselves: nothing may take over when it ends
+        begin(v, initialQuality, audioLang, startSeconds)
+        screenAttached = true
+    }
+
+    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
         if (video != null) reportProgress() // switching videos: save where the previous one stopped
         lastReported = -1L
         video = v
         lang = audioLang
         seek = StreamSeek(v.durationSeconds ?: 0L, startSeconds)
-        screenAttached = true
         load(startSeconds, initialQuality, play = true)
+    }
+
+    /**
+     * Starts TV: one video after another from the subscriptions, with no choices. Each time a video ends (or is
+     * skipped) the server is asked for the next one, from a different channel than the last. It ends on [stopTv], when
+     * the screen is left, when the server says there are too few subscriptions, after [TV_MAX_FAILURES] failures in a
+     * row, or when the user plays something else.
+     */
+    fun startTv() {
+        if (tv != null) return
+        if (video != null) stop()
+        tvMessage = null
+        tv = TvSession()
+        screenAttached = true
+        advanceTv()
+    }
+
+    /** Opening the TV screen afresh: forget why the last session stopped. */
+    fun clearTvMessage() {
+        if (tv == null) tvMessage = null
+    }
+
+    /** Skip: leave the current video (its position is saved) and fetch the next. */
+    fun skipTv() {
+        if (tv == null) return
+        if (!finished) reportProgress()
+        advanceTv()
+    }
+
+    /** Ends TV and playback. [message] is shown on the TV screen when TV stopped on its own. */
+    fun stopTv(message: String? = null) {
+        stop() // also ends the session
+        tvMessage = message
+    }
+
+    /** The TV screen was left with the app on screen: that is a stop. (In the background it plays on, like any video.) */
+    fun leaveTv() {
+        if (appVisible && tv != null) stopTv()
+    }
+
+    private fun endTv() {
+        tv = null
+        advancing?.cancel()
+    }
+
+    private fun advanceTv() {
+        val session = tv ?: return
+        advancing?.cancel()
+        buffering = true
+        advancing = scope.launch {
+            while (tv === session) {
+                try {
+                    val r = api.tvNext(session.after, session.seen)
+                    if (tv !== session) return@launch
+                    session.started(r.video.id, r.channelId.ifEmpty { r.video.channelId })
+                    begin(r.video, quality.takeIf { it > 0 } ?: r.quality, "", 0)
+                    return@launch
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: NeedSubscriptionsException) {
+                    return@launch stopTv(tvNeedStopMessage(e.message.orEmpty()))
+                } catch (e: Exception) {
+                    if (session.failed()) return@launch stopTv(tvFailureMessage(e.message))
+                    buffering = false
+                    delay(1_000)
+                    buffering = true
+                }
+            }
+        }
+    }
+
+    /** The video failed to play: count it, and skip to another one unless that was the last straw. */
+    private fun tvFailed() {
+        val session = tv ?: return
+        if (session.failed()) stopTv(tvFailureMessage(error)) else advanceTv()
     }
 
     /**
@@ -289,6 +379,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** Forget the video and tear everything down, including the service and notification. */
     fun stop() {
+        endTv()
         if (!finished && !seek.restarting) reportProgress() // before the player is torn down
         loading?.cancel()
         seek.failRestart()
@@ -304,11 +395,16 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
 
     /** Pause and remove the notification and service, but keep the video so the screen can offer Play/Replay/Retry. */
     fun endSession() {
+        endTv() // the notification was dismissed: that is a stop for TV too
         exo.pause()
         stopService()
     }
 
     private fun endIfDone() {
+        if (tv != null) { // TV: the end of a video is not the end of the session
+            if (finished) advanceTv() else if (error != null) tvFailed()
+            return
+        }
         if (!endsSession(finished, error != null, appVisible)) return
         // Nobody is on the watch screen any more: forget the video so reopening it starts fresh, not on a stale overlay.
         if (screenAttached) endSession() else stop()

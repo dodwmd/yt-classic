@@ -75,6 +75,8 @@ fun StreamPlayer(
     fullscreen: Boolean,
     onFullscreen: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** TV: adds a Skip button to the controls. */
+    onSkip: (() -> Unit)? = null,
 ) {
     val host = (LocalContext.current.applicationContext as App).host
     val total = video.durationSeconds ?: 0L
@@ -133,6 +135,7 @@ fun StreamPlayer(
                 )
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
             }
+            if (onSkip != null) TextButton(onClick = onSkip, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Skip", color = textColor) }
             TextButton(
                 onClick = { controlsVisible = true; onFullscreen(!fullscreen) }, // hidden controls must not outlive a fullscreen session
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },

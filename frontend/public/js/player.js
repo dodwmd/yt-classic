@@ -1,6 +1,7 @@
-export function initPlayer(root) {
+// onended: called when the video plays to its end. The returned now() has a reset() for loading another video into the same player.
+export function initPlayer(root, onended) {
   const v = root.querySelector("video");
-  const total = Number(root.dataset.duration);
+  let total = Number(root.dataset.duration);
   if (!v || !(total > 0)) return; // no known duration (e.g. live): keep native controls
   const $ = (s) => root.querySelector(s);
   const bar = $(".bar"), pp = $(".pp"), time = $(".time"), vol = $(".vol"), fs = $(".fs");
@@ -52,6 +53,13 @@ export function initPlayer(root) {
     else if (e.key === "ArrowLeft") seek(now() - 10);
     else if (e.key === "ArrowRight") seek(now() + 10);
   });
+  v.addEventListener("ended", () => onended?.());
+  now.reset = () => { // root.dataset.duration/start/src now describe a new video
+    total = Number(root.dataset.duration);
+    base = Number(root.dataset.start) || 0;
+    bar.max = total;
+    paint();
+  };
   paint();
   return now; // current position in seconds, for progress reporting
 }
