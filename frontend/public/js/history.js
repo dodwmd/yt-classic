@@ -1,45 +1,64 @@
-import { $, api, cardNode, markWatched, pctOf, run, setTitle, thumbUrl } from "./lib.js";
-import { formatSeconds, timeAgo } from "./fmt.js";
+import { $, api, historyCard, markWatched, run, setTitle } from "./lib.js";
+import { timeAgo } from "./fmt.js";
 
-const post = (path, method = "POST") => api(path, { method });
+const shown = new Set();
 let next;
+let busy = false;
+
+async function attempt(request) {
+  $("#err").hidden = true;
+  try {
+    await request();
+  } catch (err) {
+    $("#err").textContent = err.message || String(err);
+    $("#err").hidden = false;
+  }
+}
+const empty = () => ($("#none").hidden = !!$("#hist-grid").children.length);
 
 async function load() {
-  const { items, next: n } = await api(`/api/history?limit=48${next ? `&before=${next}` : ""}`);
-  next = n;
-  for (const h of items) {
-    const card = cardNode({
-      id: h.id, title: h.title, thumb: thumbUrl(h.id), duration: h.durationSeconds && formatSeconds(h.durationSeconds),
-      channelId: h.channelId, channelTitle: h.channelTitle, pct: h.completed ? 0 : pctOf(h), meta: timeAgo(new Date(h.lastWatched).toISOString()),
-    });
-    const rm = document.createElement("button");
-    rm.type = "button";
-    rm.className = "rm";
-    rm.textContent = "Remove";
-    rm.setAttribute("aria-label", `Remove ${h.title} from history`);
-    rm.addEventListener("click", async () => {
-      await post(`/api/history/${h.id}`, "DELETE");
-      card.remove();
-      $("#none").hidden = !!$("#hist-grid").children.length;
-    });
-    card.append(rm);
-    $("#hist-grid").append(card);
-  }
-  $("#more").hidden = n === undefined;
-  $("#none").hidden = !!$("#hist-grid").children.length;
+  if (busy) return;
+  busy = true;
+  $("#more").disabled = true;
+  await attempt(async () => {
+    const page = await api(`/api/history?limit=48${next ? `&before=${encodeURIComponent(next)}` : ""}`);
+    next = page.next;
+    for (const h of page.items) {
+      if (shown.has(h.id)) continue;
+      shown.add(h.id);
+      const card = historyCard(h, timeAgo(new Date(h.lastWatched).toISOString()));
+      const rm = document.createElement("button");
+      rm.type = "button";
+      rm.className = "rm";
+      rm.textContent = "Remove";
+      rm.setAttribute("aria-label", `Remove ${h.title} from history`);
+      rm.addEventListener("click", () => attempt(async () => {
+        await api(`/api/history/${h.id}`, { method: "DELETE" });
+        shown.delete(h.id);
+        card.remove();
+        empty();
+      }));
+      card.append(rm);
+      $("#hist-grid").append(card);
+    }
+    $("#more").hidden = !next;
+    empty();
+  });
+  $("#more").disabled = busy = false;
 }
 
 run(async () => {
   setTitle("History");
-  await load();
   $("#history").hidden = false;
+  await load();
   markWatched();
   $("#more").addEventListener("click", () => load().then(markWatched));
-  $("#clear").addEventListener("click", async () => {
-    if (!confirm("Clear the whole watch history? This cannot be undone.")) return;
-    await post("/api/history/clear");
+  $("#clear").addEventListener("click", () => confirm("Clear the whole watch history? This cannot be undone.") && attempt(async () => {
+    await api("/api/history/clear", { method: "POST" });
+    shown.clear();
+    next = undefined;
     $("#hist-grid").replaceChildren();
     $("#more").hidden = true;
-    $("#none").hidden = false;
-  });
+    empty();
+  }));
 });

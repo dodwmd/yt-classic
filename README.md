@@ -40,7 +40,7 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 ```
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
-  unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=`, `GET /api/history/watched?ids=a,b`,
+  unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
   `DELETE /api/history/:id`, `POST /api/history/clear`) plus the video stream (`/stream/:id`). It contains no HTML.
 - **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
@@ -202,6 +202,12 @@ The history is stored only in your own `yt.db` and is never sent anywhere. It is
 can reach your server can read it, like the subscriptions. A video is recorded once you have watched 5 seconds, a
 position is only saved when it moved by at least 2 seconds, and a video counts as watched (completed) when you reach
 within 10 seconds of the end or the player reports it ended. Titles and channels are never taken from the client.
+Trust model: like the subscriptions, the history can be read, removed and cleared by anyone who can reach the API
+(the LAN trust model; an optional access token is planned separately). A still-open playing tab can write an entry
+back after you removed or cleared it; that is accepted. To stop junk from evicting real history, at most 60 *new*
+history rows are accepted per hour (further new videos get HTTP 429 until the window passes; existing rows keep
+updating), positions and durations are capped at 100 hours, and paging uses an opaque `next` cursor passed back as
+`before`. The web page only reports once a video has really started playing.
 To remove entries use the Remove buttons on `/history` (or the Android History screen); **Clear all history** (web
 and Android) deletes everything, or `curl -X POST http://localhost:8080/api/history/clear`.
 

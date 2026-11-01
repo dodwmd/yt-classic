@@ -174,8 +174,8 @@ class ApiTest {
 
     @Test
     fun historyParsesRealResponse() = runBlocking {
-        val page = api.history(before = 123)
-        assertEquals("GET /api/history?limit=48&before=123", requests.last())
+        val page = api.history(before = "1793542868467.2")
+        assertEquals("GET /api/history?limit=48&before=1793542868467.2", requests.last())
         assertEquals(2, page.items.size)
         assertTrue(page.items.first().completed)
         assertNull(page.items.first().fraction) // finished: no bar

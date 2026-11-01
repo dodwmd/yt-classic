@@ -41,7 +41,7 @@ fun WatchScreen(
     LoadedContent(loaded) { r ->
         val v = r.video
         // Where this screen left off (also the explicit start), else where the server last saw it (any device).
-        val begin = remember(v.id) { resumeStart(resume[0], r.progress) }
+        val begin = remember(v.id) { resumeStart(resume[0], r.progress, v.durationSeconds ?: 0L) }
         var expanded by remember(v.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.

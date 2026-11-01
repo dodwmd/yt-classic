@@ -10,7 +10,7 @@ import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { BusyError } from "./limit.ts";
-import { MAX_PAGE, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
+import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
@@ -149,10 +149,12 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
 
   if (path === "/api/history" && req.method === "GET") {
     const limit = Number(param("limit") || 50);
-    const before = param("before") === "" ? Infinity : Number(param("before"));
-    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE || Number.isNaN(before)) return json(res, 400, { error: "bad limit or before" });
-    const items = listHistory(limit, before);
-    return json(res, 200, { items, next: items.length === limit ? items[items.length - 1].lastWatched : undefined });
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) return json(res, 400, { error: "bad limit" });
+    try {
+      return json(res, 200, listHistory(limit, param("before")));
+    } catch {
+      return json(res, 400, { error: "bad before" });
+    }
   }
 
   if (path === "/api/history/watched" && req.method === "GET") {
@@ -165,15 +167,19 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     if (!p) return json(res, 413, { error: "body too large" });
     if (!VIDEO_ID.test(p.id)) return json(res, 400, { error: "bad video id" });
     if (!Number.isFinite(p.position) || p.position < 0) return json(res, 400, { error: "bad position" });
+    p.position = Math.min(p.position, MAX_SECONDS);
     // Title, channel and duration come from the server's own metadata, never from the request. Only a video that
     // is not in the history yet (and has been watched for a meaningful time) needs a lookup.
     let meta = null;
     if (!isKnown(p.id) && (p.finished || p.position >= MIN_START)) {
+      if (!newRowAllowed()) return json(res, 429, { error: "too many new history entries; try again later" }, { "retry-after": "600" });
       const v = await video(p.id);
       if (!v) return json(res, 404, { error: "video not found" });
       meta = { id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 };
     }
-    return json(res, 200, { recorded: recordProgress(p.id, p.position, p.finished, meta) === "recorded" });
+    const outcome = recordProgress(p.id, p.position, p.finished, meta);
+    if (outcome === "limited") return json(res, 429, { error: "too many new history entries; try again later" }, { "retry-after": "600" });
+    return json(res, 200, { recorded: outcome === "recorded" });
   }
 
   if (path === "/api/history/clear" && req.method === "POST") {

@@ -26,6 +26,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
 
 /**
@@ -50,6 +52,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private var loading: Job? = null
     private var pendingPlay = false // whether the pending restart should start playing
     private var lang = ""
+    private val reportLock = Mutex()
     private var lastReported = -1L // the last position sent to the server
     private var screenAttached = false // the watch screen for [video] is in composition
 
@@ -136,7 +139,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         exo.addListener(object : Player.Listener {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 this@PlaybackHost.isPlaying = isPlaying
-                if (!isPlaying && !seek.restarting) reportProgress() // paused or stopped
+                if (reportsOnPause(isPlaying, exo.playWhenReady, seek.restarting)) reportProgress() // paused or stopped
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -167,6 +170,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
     fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
         if (video?.id == v.id) return
+        if (video != null) reportProgress() // switching videos: save where the previous one stopped
         lastReported = -1L
         video = v
         lang = audioLang
@@ -181,12 +185,16 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
      */
     private fun reportProgress(finished: Boolean = false) {
         val v = video ?: return
+        if (seek.totalSeconds <= 0) return // unknown length (live): there is nothing to resume
         val position = positionSeconds()
         if (!shouldReport(position, lastReported, finished)) return
         lastReported = position
         scope.launch {
             try {
-                api.reportProgress(v.id, position, finished)
+                // One at a time and in order, so a slow timer post can never land after a newer pause post.
+                reportLock.withLock { api.reportProgress(v.id, position, finished) }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.d("PlaybackHost", "progress not saved: ${e.javaClass.simpleName}")
             }

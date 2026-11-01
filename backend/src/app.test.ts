@@ -48,6 +48,7 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
     if (u.includes("/youtube/v3/videos")) {
       videoCalls++;
       const id = new URL(u).searchParams.get("id");
+      if (id === "FAILING0000") return new Response("{}", { status: 500 });
       if (id === "NOTFOUND000") return new Response(JSON.stringify({ items: [] }), { status: 200 });
       const item = {
         id, snippet: { title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: "https://i.ytimg.com/server.jpg" } } },
@@ -232,12 +233,26 @@ test("POST /api/progress rejects bad input and ignores trivial updates", async (
   assert.equal((await post("/api/progress", "{not json", { "content-type": "application/json" })).status, 400);
   assert.equal((await post("/api/progress", `id=${VID}&position=${"9".repeat(5000)}`)).status, 413);
   assert.equal((await post("/api/progress", `id=NOTFOUND000&position=30`)).status, 404);
+  const real = console.error;
+  console.error = () => {};
+  try {
+    assert.equal((await post("/api/progress", `id=FAILING0000&position=30`)).status, 502); // Data API down
+  } finally {
+    console.error = real;
+  }
+  assert.deepEqual(await hist(), [], "a failed or empty metadata lookup must not create a row");
   const short = await post("/api/progress", `id=${VID}&position=3`);
   assert.deepEqual(JSON.parse(short.body), { recorded: false });
-  assert.equal(videoCalls, 1, "a sub-5s look must not even look the video up (only the NOTFOUND probe did)");
+  assert.equal(videoCalls, 2, "a sub-5s look must not even look the video up (only the two probes did)");
   assert.deepEqual(await hist(), []);
   await post("/api/progress", `id=${VID}&position=30`);
   assert.deepEqual(JSON.parse((await post("/api/progress", `id=${VID}&position=31`)).body), { recorded: false });
+});
+
+test("absurd positions are clamped before they are stored", async () => {
+  assert.equal((await post("/api/progress", `id=${VID}&position=1e308`)).status, 200);
+  assert.equal((await hist())[0].position, 600); // clamped to the video's length
+  assert.equal((await post("/api/progress", `id=${VID}&position=1e999`)).status, 400); // Infinity
 });
 
 test("history endpoints are same-origin only for writes", async () => {
@@ -258,10 +273,11 @@ test("GET /api/history validates limit/before and pages", async () => {
   assert.equal((await get("/api/history?limit=0")).status, 400);
   assert.equal((await get("/api/history?limit=101")).status, 400);
   assert.equal((await get("/api/history?before=abc")).status, 400);
+  assert.equal((await get("/api/history?before=1")).status, 400); // cursors are opaque, not timestamps
   await post("/api/progress", `id=${VID}&position=30`);
   const page = JSON.parse((await get("/api/history?limit=1")).body);
   assert.equal(page.items.length, 1);
-  assert.equal(page.next, page.items[0].lastWatched);
+  assert.match(page.next, /^\d+\.\d+$/);
   assert.deepEqual(JSON.parse((await get(`/api/history?limit=1&before=${page.next}`)).body).items, []);
 });
 

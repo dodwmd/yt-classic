@@ -84,7 +84,7 @@ class YtApi(
         execute(Request.Builder().url(url("api/progress")).post(body).build()).use { }
     }
 
-    suspend fun history(before: Long? = null): HistoryPage = get("api/history", "limit" to "48", "before" to before?.toString())
+    suspend fun history(before: String? = null): HistoryPage = get("api/history", "limit" to "48", "before" to before)
 
     /** Which of [ids] (at most 100) were watched to the end. */
     suspend fun watched(ids: List<String>): Set<String> =

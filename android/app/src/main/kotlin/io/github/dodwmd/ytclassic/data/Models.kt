@@ -101,7 +101,7 @@ data class HistoryItem(
 }
 
 @Serializable
-data class HistoryPage(val items: List<HistoryItem> = emptyList(), val next: Long? = null)
+data class HistoryPage(val items: List<HistoryItem> = emptyList(), val next: String? = null)
 
 @Serializable
 data class WatchedResponse(val ids: List<String> = emptyList())

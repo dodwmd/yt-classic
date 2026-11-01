@@ -1,3 +1,5 @@
+import { formatSeconds } from "./fmt.js";
+
 // Small helpers shared by the pages. Data is only ever put into the DOM with textContent and property
 // assignment, never as HTML strings (a test enforces this).
 
@@ -12,14 +14,12 @@ export async function api(path, init) {
 
 export const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
 
-/** Only https image URLs from the API are used. */
 export const safeImg = (u) => (typeof u === "string" && u.startsWith("https://") ? u : "");
 
 export const watchHref = (id, extra = "") => `/watch?v=${encodeURIComponent(id)}${extra}`;
 export const channelHref = (id) => `/channel/${encodeURIComponent(id)}`;
 export const thumbUrl = (id, size = "mqdefault") => `https://i.ytimg.com/vi/${encodeURIComponent(id)}/${size}.jpg`;
 
-/** Show "Loading…" until main() finishes, or the error message if it throws. */
 export async function run(main) {
   const status = $("#status");
   try {
@@ -35,7 +35,17 @@ export function setTitle(title) {
   document.title = `${title} - YouTube Classic`;
 }
 
-/** Fill a #t-card template: { id, title, thumb, duration?, tooltip?, channelId?, channelTitle?, meta? } */
+export function fillRow(row, { id, title, thumb, duration }) {
+  $(".thumb", row).href = watchHref(id);
+  $("img", row).src = safeImg(thumb);
+  if (duration) {
+    $(".dur", row).textContent = duration;
+    $(".dur", row).hidden = false;
+  }
+  $(".title", row).textContent = title;
+  $(".title", row).href = watchHref(id);
+}
+
 export function cardNode(c) {
   const n = clone("t-card");
   n.querySelector(".thumb").href = watchHref(c.id);
@@ -64,7 +74,6 @@ export function cardNode(c) {
   return n;
 }
 
-/** A thin bar along the bottom of a thumbnail; the width is set through the CSSOM, never as inline HTML. */
 function progressBar(thumb, pct) {
   const bar = document.createElement("span");
   bar.className = "prog";
@@ -73,10 +82,13 @@ function progressBar(thumb, pct) {
   thumb.append(bar);
 }
 
-/** Percent watched for a history item (0 when the length is unknown). */
-export const pctOf = (h) => (h.durationSeconds ? Math.round((100 * h.position) / h.durationSeconds) : 0);
+const pctOf = (h) => (h.durationSeconds ? Math.round((100 * h.position) / h.durationSeconds) : 0);
 
-/** Adds a "Watched" badge to every video thumbnail on the page that has been watched to the end. Never fails the page. */
+export const historyCard = (h, meta) => cardNode({
+  id: h.id, title: h.title, thumb: thumbUrl(h.id), duration: h.durationSeconds && formatSeconds(h.durationSeconds),
+  channelId: h.channelId, channelTitle: h.channelTitle, pct: h.completed ? 0 : pctOf(h), meta,
+});
+
 export async function markWatched() {
   try {
     const thumbs = [...document.querySelectorAll('.thumb[href^="/watch?v="]')].slice(0, 100);
@@ -91,6 +103,5 @@ export async function markWatched() {
       a.append(b);
     }
   } catch {
-    // badges are a nicety
   }
 }

@@ -10,10 +10,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import android.widget.Toast
 import androidx.compose.material3.AlertDialog
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.TextButton
-import androidx.compose.runtime.produceState
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import io.github.dodwmd.ytclassic.data.HistoryItem
@@ -66,18 +68,28 @@ fun SummaryRow(v: VideoSummary, onVideo: (String) -> Unit, watched: Boolean = fa
     onClick = { onVideo(v.id) },
 )
 
-/** The ids (of those asked about) that were watched to the end. A failure just means no badges. */
+/**
+ * The ids (among [ids]) that were watched to the end. Each id is asked about once: later pages only query the new
+ * ones, chunks that were answered are kept when a later chunk fails, and a failure just means fewer badges.
+ */
 @Composable
-fun rememberWatched(api: YtApi, ids: List<String>): Set<String> =
-    produceState(emptySet<String>(), ids) {
-        value = try {
-            ids.chunked(100).flatMapTo(mutableSetOf()) { api.watched(it) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            emptySet()
+fun rememberWatched(api: YtApi, ids: List<String>): Set<String> {
+    val asked = remember(api) { mutableSetOf<String>() }
+    var watched by remember(api) { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(ids) {
+        for (chunk in ids.filter { it !in asked }.chunked(100)) {
+            try {
+                watched = watched + api.watched(chunk)
+                asked += chunk
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // no badges for this chunk; it is asked again next time
+            }
         }
-    }.value
+    }
+    return watched
+}
 
 /** Row for a history entry: shows how far you got, as a bar and in words (for TalkBack). */
 @Composable
@@ -96,6 +108,11 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
     LoadedContent(loaded) { home ->
         val watched = rememberWatched(api, home.feed.map { it.id })
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onHistory, modifier = Modifier.semantics { contentDescription = "Watch history" }) { Text("History") }
+                }
+            }
             if (home.resume.isNotEmpty()) {
                 item { SectionTitle("Continue watching") }
                 items(home.resume, key = { "c" + it.id }) { HistoryRow(it, onVideo) }
@@ -117,7 +134,6 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
                 item { SectionTitle("New from your subscriptions") }
                 items(home.feed.distinctBy { it.id }, key = { it.id }) { FeedRow(it, onVideo, it.id in watched) }
             }
-            item { TextButton(onClick = onHistory, modifier = Modifier.padding(horizontal = 4.dp)) { Text("Watch history") } }
         }
     }
 }
@@ -130,14 +146,22 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
         var next by remember(page) { mutableStateOf(page.next) }
         var failure by remember(page) { mutableStateOf<String?>(null) }
         var confirmClear by remember(page) { mutableStateOf(false) }
+        var busy by remember(page) { mutableStateOf(false) } // one request at a time: no double taps
         val scope = rememberCoroutineScope()
+        val context = LocalContext.current
         fun attempt(block: suspend () -> Unit) {
+            if (busy) return
+            busy = true
             scope.launch {
                 try {
                     block()
                     failure = null
                 } catch (e: ApiException) {
                     failure = e.message
+                    // The list may be scrolled away from the header, so say it where the user is looking.
+                    Toast.makeText(context, e.message ?: "Request failed.", Toast.LENGTH_LONG).show()
+                } finally {
+                    busy = false
                 }
             }
         }
@@ -146,7 +170,7 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
                 Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Watch history", style = MaterialTheme.typography.titleLarge)
                     Text("Kept only on your own server, nowhere else.", color = Muted)
-                    OutlinedButton(enabled = items.isNotEmpty(), onClick = { confirmClear = true }) { Text("Clear all history") }
+                    OutlinedButton(enabled = items.isNotEmpty() && !busy, onClick = { confirmClear = true }) { Text("Clear all history") }
                     failure?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                     if (items.isEmpty()) Text("Nothing watched yet.")
                 }
@@ -155,6 +179,7 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
                 Column {
                     HistoryRow(h, onVideo)
                     TextButton(
+                        enabled = !busy,
                         onClick = { attempt { api.removeFromHistory(h.id); items = items.filter { it.id != h.id } } },
                         modifier = Modifier.padding(horizontal = 4.dp).semantics { contentDescription = "Remove ${h.title} from history" },
                     ) { Text("Remove") }
@@ -162,13 +187,16 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
             }
             if (next != null) {
                 item {
-                    OutlinedButton(modifier = Modifier.padding(12.dp), onClick = {
-                        attempt {
-                            val more = api.history(next)
-                            items = items + more.items.filter { n -> items.none { it.id == n.id } }
-                            next = more.next
-                        }
-                    }) { Text("Load more") }
+                    Column(Modifier.padding(12.dp)) {
+                        OutlinedButton(enabled = !busy, onClick = {
+                            attempt {
+                                val more = api.history(next)
+                                items = items + more.items.filter { n -> items.none { it.id == n.id } }
+                                next = more.next
+                            }
+                        }) { Text("Load more") }
+                        failure?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    }
                 }
             }
         }
