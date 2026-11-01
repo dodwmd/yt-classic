@@ -1,0 +1,11 @@
+FROM docker.io/library/node:22-bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg python3 curl ca-certificates \
+ && curl -fsSL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp \
+ && chmod +x /usr/local/bin/yt-dlp && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev || npm install --omit=dev
+COPY src ./src
+ENV PORT=3000 DATA_DIR=/data
+EXPOSE 3000
+CMD ["sh", "-c", "yt-dlp -U || true; exec node --experimental-strip-types src/server.ts"]
