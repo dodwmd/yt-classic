@@ -25,6 +25,7 @@ import io.github.dodwmd.ytclassic.data.formatViews
 import io.github.dodwmd.ytclassic.data.joinParts
 import io.github.dodwmd.ytclassic.data.timeAgo
 import io.github.dodwmd.ytclassic.player.StreamPlayer
+import io.github.dodwmd.ytclassic.player.resumeStart
 
 @Composable
 fun WatchScreen(
@@ -39,10 +40,12 @@ fun WatchScreen(
     val loaded = rememberLoad(id) { api.video(id) }
     LoadedContent(loaded) { r ->
         val v = r.video
+        // Where this screen left off (also the explicit start), else where the server last saw it (any device).
+        val begin = remember(v.id) { resumeStart(resume[0], r.progress, v.durationSeconds ?: 0L) }
         var expanded by remember(v.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
-            StreamPlayer(v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
+            StreamPlayer(v, r.quality, r.qualities, r.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
             if (!fullscreen) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {

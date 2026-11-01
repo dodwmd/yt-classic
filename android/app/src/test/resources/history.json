@@ -1,0 +1,28 @@
+{
+  "items": [
+    {
+      "id": "aaaaaaaaaaa",
+      "title": "Finished video",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Some channel",
+      "thumb": "https://i.ytimg.com/vi/aaaaaaaaaaa/mqdefault.jpg",
+      "durationSeconds": 600,
+      "position": 600,
+      "completed": true,
+      "lastWatched": 1793542868468,
+      "watchCount": 1
+    },
+    {
+      "id": "dQw4w9WgXcQ",
+      "title": "Half watched video",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Some channel",
+      "thumb": "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg",
+      "durationSeconds": 600,
+      "position": 240,
+      "completed": false,
+      "lastWatched": 1793542868467,
+      "watchCount": 0
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { $, api, channelHref, clone, run, safeImg, setTitle, watchHref } from "./lib.js";
+import { $, api, channelHref, clone, fillRow, markWatched, run, setTitle } from "./lib.js";
 import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 const params = new URLSearchParams(location.search);
@@ -20,14 +20,7 @@ run(async () => {
   if (!page.items.length) $("#none").hidden = false;
   for (const v of page.items) {
     const row = clone("t-result");
-    $(".thumb", row).href = watchHref(v.id);
-    $("img", row).src = safeImg(v.thumb);
-    if (v.durationSeconds) {
-      $(".dur", row).textContent = formatSeconds(v.durationSeconds);
-      $(".dur", row).hidden = false;
-    }
-    $(".title", row).textContent = v.title;
-    $(".title", row).href = watchHref(v.id);
+    fillRow(row, { ...v, duration: v.durationSeconds && formatSeconds(v.durationSeconds) });
     $(".chan", row).textContent = v.channelTitle;
     $(".chan", row).href = channelHref(v.channelId);
     const extra = join(v.publishedAt && timeAgo(v.publishedAt), v.views && formatViews(v.views));
@@ -35,6 +28,7 @@ run(async () => {
     $(".desc", row).textContent = v.description;
     $("#results").append(row);
   }
+  markWatched();
   for (const [id, tok] of [["prev", page.prevPageToken], ["next", page.nextPageToken]]) {
     if (!tok) continue;
     $(`#${id}`).href = `/results?${new URLSearchParams({ search_query: q, pageToken: tok })}`;

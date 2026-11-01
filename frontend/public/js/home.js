@@ -1,14 +1,16 @@
-import { $, api, cardNode, channelHref, clone, run, setTitle, thumbUrl } from "./lib.js";
-import { formatViews, join, timeAgo } from "./fmt.js";
+import { $, api, cardNode, channelHref, clone, historyCard, markWatched, run, setTitle, thumbUrl } from "./lib.js";
+import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 run(async () => {
   setTitle("Home");
-  const { subs, feed } = await api("/api/home");
-  if (!subs.length) {
+  const { subs, feed, continue: resume } = await api("/api/home");
+  if (!subs.length && !resume.length) {
     $("#empty").hidden = false;
     return;
   }
   $("#home").hidden = false;
+  $("#cont").hidden = !resume.length;
+  for (const h of resume) $("#cont-grid").append(historyCard(h, `${formatSeconds(h.position)} watched`));
   for (const v of feed) {
     $("#feed-grid").append(cardNode({
       id: v.id, title: v.title, tooltip: v.description, thumb: thumbUrl(v.id),
@@ -23,4 +25,5 @@ run(async () => {
     a.href = channelHref(s.id);
     $("#subs-list").append(li);
   }
+  markWatched();
 });

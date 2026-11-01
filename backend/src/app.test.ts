@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app.ts";
 import { clearCache } from "./cache.ts";
+import { clearHistory } from "./history.ts";
 import { killChildren } from "./yt/dlp.ts";
 
 const CHANNEL = "UC" + "a".repeat(22);
@@ -16,6 +17,7 @@ let server: Server;
 let port = 0;
 let tmp = "";
 const realFetch = globalThis.fetch;
+let videoCalls = 0;
 
 function script(name: string, body: string): string {
   const p = join(tmp, name);
@@ -43,6 +45,17 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
       const item = { id: CHANNEL, snippet: { title: "Chan", description: "d", thumbnails: {} }, statistics: {}, brandingSettings: {} };
       return new Response(JSON.stringify({ items: [item] }), { status: 200 });
     }
+    if (u.includes("/youtube/v3/videos")) {
+      videoCalls++;
+      const id = new URL(u).searchParams.get("id");
+      if (id === "FAILING0000") return new Response("{}", { status: 500 });
+      if (id === "NOTFOUND000") return new Response(JSON.stringify({ items: [] }), { status: 200 });
+      const item = {
+        id, snippet: { title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: "https://i.ytimg.com/server.jpg" } } },
+        contentDetails: { duration: "PT10M" }, statistics: {},
+      };
+      return new Response(JSON.stringify({ items: [item] }), { status: 200 });
+    }
     return new Response("{}", { status: 404 });
   }) as typeof fetch;
   server = createApp();
@@ -60,6 +73,8 @@ after(() => {
 
 beforeEach(() => {
   clearCache();
+  clearHistory();
+  videoCalls = 0;
   rmSync(process.env.PIDFILE!, { force: true });
   delete process.env.FAKE_RESOLVE_SLEEP;
   delete process.env.ALLOWED_HOSTS;
@@ -95,7 +110,7 @@ test("basic routing and validation", async () => {
 test("/api/home returns exactly the subscriptions and the feed (no suggestion rows)", async () => {
   const r = await get("/api/home");
   assert.equal(r.status, 200);
-  assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["feed", "subs"]);
+  assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["continue", "feed", "subs"]);
 });
 
 test("search returns JSON with raw (unescaped) data; escaping is the frontend's job", async () => {
@@ -183,4 +198,98 @@ test("/healthz reflects database health: 200, then 503 while it cannot be opened
     process.env.DATA_DIR = good;
   }
   assert.equal((await get("/healthz")).status, 200);
+});
+
+const form = { "content-type": "application/x-www-form-urlencoded" };
+const post = (path: string, body: string, headers: Record<string, string> = form) => get(path, { method: "POST", body, headers });
+const hist = async () => JSON.parse((await get("/api/history")).body).items as Record<string, unknown>[];
+
+test("POST /api/progress records server-side metadata, never the client's", async () => {
+  const body = `id=${VID}&position=42&duration=1&title=EVIL&channelTitle=EVIL&thumb=http://evil`;
+  const r = await post("/api/progress", body);
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(r.body), { recorded: true });
+  const [row] = await hist();
+  assert.equal(row.title, "Server title");
+  assert.equal(row.channelTitle, "Server chan");
+  assert.equal(row.thumb, "https://i.ytimg.com/server.jpg");
+  assert.equal(row.durationSeconds, 600);
+  assert.equal(row.position, 42);
+  // Later updates reuse the stored row: no further Data API call.
+  const calls = videoCalls;
+  assert.equal(JSON.parse((await post("/api/progress", `id=${VID}&position=90`)).body).recorded, true);
+  assert.equal(videoCalls, calls);
+  // JSON bodies work too (Android), including finished.
+  const j = await post("/api/progress", JSON.stringify({ id: VID, position: 91, finished: true }), { "content-type": "application/json" });
+  assert.equal(j.status, 200);
+  assert.equal((await hist())[0].completed, true);
+});
+
+test("POST /api/progress rejects bad input and ignores trivial updates", async () => {
+  assert.equal((await post("/api/progress", "id=bad&position=10")).status, 400);
+  assert.equal((await post("/api/progress", `id=${VID}&position=abc`)).status, 400);
+  assert.equal((await post("/api/progress", `id=${VID}&position=-5`)).status, 400);
+  assert.equal((await post("/api/progress", `id=${VID}`)).status, 400);
+  assert.equal((await post("/api/progress", "{not json", { "content-type": "application/json" })).status, 400);
+  assert.equal((await post("/api/progress", `id=${VID}&position=${"9".repeat(5000)}`)).status, 413);
+  assert.equal((await post("/api/progress", `id=NOTFOUND000&position=30`)).status, 404);
+  const real = console.error;
+  console.error = () => {};
+  try {
+    assert.equal((await post("/api/progress", `id=FAILING0000&position=30`)).status, 502); // Data API down
+  } finally {
+    console.error = real;
+  }
+  assert.deepEqual(await hist(), [], "a failed or empty metadata lookup must not create a row");
+  const short = await post("/api/progress", `id=${VID}&position=3`);
+  assert.deepEqual(JSON.parse(short.body), { recorded: false });
+  assert.equal(videoCalls, 2, "a sub-5s look must not even look the video up (only the two probes did)");
+  assert.deepEqual(await hist(), []);
+  await post("/api/progress", `id=${VID}&position=30`);
+  assert.deepEqual(JSON.parse((await post("/api/progress", `id=${VID}&position=31`)).body), { recorded: false });
+});
+
+test("absurd positions are clamped before they are stored", async () => {
+  assert.equal((await post("/api/progress", `id=${VID}&position=1e308`)).status, 200);
+  assert.equal((await hist())[0].position, 600); // clamped to the video's length
+  assert.equal((await post("/api/progress", `id=${VID}&position=1e999`)).status, 400); // Infinity
+});
+
+test("history endpoints are same-origin only for writes", async () => {
+  await post("/api/progress", `id=${VID}&position=30`);
+  const evil = { ...form, origin: "http://evil.example" };
+  assert.equal((await post("/api/progress", `id=${VID}&position=100`, evil)).status, 403);
+  assert.equal((await post("/api/history/clear", "", evil)).status, 403);
+  assert.equal((await get(`/api/history/${VID}`, { method: "DELETE", headers: { origin: "http://evil.example" } })).status, 403);
+  assert.equal((await hist()).length, 1);
+  assert.equal((await get("/api/history/bad", { method: "DELETE" })).status, 400);
+  assert.deepEqual(JSON.parse((await get(`/api/history/${VID}`, { method: "DELETE" })).body), { removed: true });
+  await post("/api/progress", `id=${VID}&position=30`);
+  assert.deepEqual(JSON.parse((await post("/api/history/clear", "")).body), { removed: 1 });
+  assert.deepEqual(await hist(), []);
+});
+
+test("GET /api/history validates limit/before and pages", async () => {
+  assert.equal((await get("/api/history?limit=0")).status, 400);
+  assert.equal((await get("/api/history?limit=101")).status, 400);
+  assert.equal((await get("/api/history?before=abc")).status, 400);
+  assert.equal((await get("/api/history?before=1")).status, 400); // cursors are opaque, not timestamps
+  await post("/api/progress", `id=${VID}&position=30`);
+  const page = JSON.parse((await get("/api/history?limit=1")).body);
+  assert.equal(page.items.length, 1);
+  assert.match(page.next, /^\d+\.\d+$/);
+  assert.deepEqual(JSON.parse((await get(`/api/history?limit=1&before=${page.next}`)).body).items, []);
+});
+
+test("video and home expose progress / continue; watched lookup", async () => {
+  assert.equal(JSON.parse((await get(`/api/video/${VID}`)).body).progress, undefined);
+  await post("/api/progress", `id=${VID}&position=30`);
+  assert.deepEqual(JSON.parse((await get(`/api/video/${VID}`)).body).progress, { position: 30, completed: false });
+  const home = JSON.parse((await get("/api/home")).body);
+  assert.equal(home.continue.length, 1);
+  assert.equal(home.continue[0].id, VID);
+  assert.deepEqual(JSON.parse((await get(`/api/history/watched?ids=${VID}`)).body).ids, []);
+  await post("/api/progress", `id=${VID}&position=600&finished=1`);
+  assert.deepEqual(JSON.parse((await get(`/api/history/watched?ids=${VID},bad`)).body).ids, [VID]);
+  assert.deepEqual(JSON.parse((await get("/api/home")).body).continue, []);
 });

@@ -19,15 +19,21 @@
 <div id="page">
   <noscript><p>This page needs JavaScript to load its data.</p></noscript>
   <p id="status" role="status">Loading&hellip;</p>
-  <p id="empty" hidden>No subscriptions yet. Search for a video, open its channel and click Subscribe.</p>
+  <p id="empty" hidden>No subscriptions yet. Search for a video, open its channel and click Subscribe. <a href="/history">Watch history</a></p>
   <div id="home" hidden>
     <div id="feed">
+      <div id="cont" hidden>
+        <h3>Continue watching</h3>
+        <div class="grid" id="cont-grid"></div>
+      </div>
       <h3>New from your subscriptions</h3>
       <div class="grid" id="feed-grid"></div>
     </div>
     <div id="subs">
       <h3>Subscriptions</h3>
       <ul id="subs-list"></ul>
+      <h3>History</h3>
+      <p><a href="/history">Watch history</a></p>
     </div>
   </div>
 </div>

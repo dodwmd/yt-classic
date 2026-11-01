@@ -1,4 +1,4 @@
-import { $, api, cardNode, run, safeImg, setTitle, thumbUrl } from "./lib.js";
+import { $, api, cardNode, markWatched, run, safeImg, setTitle, thumbUrl } from "./lib.js";
 import { timeAgo } from "./fmt.js";
 
 const id = decodeURIComponent(location.pathname.split("/")[2] ?? "");
@@ -46,6 +46,7 @@ run(async () => {
   for (const v of page.items) {
     $("#uploads").append(cardNode({ id: v.id, title: v.title, thumb: v.thumb || thumbUrl(v.id), meta: timeAgo(v.publishedAt) }));
   }
+  markWatched();
   for (const [name, tok] of [["prev", page.prevPageToken], ["next", page.nextPageToken]]) {
     if (!tok) continue;
     $(`#${name}`).href = `/channel/${encodeURIComponent(id)}?${new URLSearchParams({ pageToken: tok })}`;

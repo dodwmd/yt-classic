@@ -41,6 +41,25 @@ export const MIGRATIONS: Migration[] = [
       UPDATE cache SET size = length(CAST(val AS BLOB));
     `,
   },
+  {
+    // Watch history: one row per video, updated in place as it is watched.
+    version: 3,
+    sql: `
+      CREATE TABLE history (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_title TEXT NOT NULL,
+        thumb TEXT NOT NULL,
+        duration INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        last_watched INTEGER NOT NULL,
+        completed INTEGER NOT NULL DEFAULT 0,
+        watch_count INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE INDEX history_last ON history (last_watched);
+    `,
+  },
 ];
 
 /**

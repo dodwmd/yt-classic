@@ -33,7 +33,7 @@ test("migrations apply and are idempotent", () => {
 test("later migrations are applied on top, in order, once", () => {
   const db = new DatabaseSync(":memory:");
   migrate(db);
-  const extra = [...MIGRATIONS, { version: 99, sql: "CREATE TABLE history (id TEXT PRIMARY KEY)" }];
+  const extra = [...MIGRATIONS, { version: 99, sql: "CREATE TABLE extra_table (id TEXT PRIMARY KEY)" }];
   assert.equal(migrate(db, extra), 99);
   assert.equal(migrate(db, extra), 99);
   assert.deepEqual(versions(db), [...MIGRATIONS.map((m) => m.version), 99]);

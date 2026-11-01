@@ -22,6 +22,9 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .chead { display: flex; align-items: center; gap: 12px; } .chead h1 { font-size: 22px; margin: 0; }
 #feed { flex: 1; } #feed h3 { margin: 16px 0 8px; } #feed h3:first-child { margin-top: 0; }
 .card .thumb, .rel .thumb { position: relative; display: block; } .card .dur, .rel .dur { position: absolute; right: 2px; bottom: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
+.badge { position: absolute; left: 2px; top: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
+.prog { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #555; } .prog i { display: block; height: 100%; background: #c00; }
+#hist-bar { display: flex; align-items: center; gap: 16px; margin: 8px 0 16px; } .rm { margin-top: 4px; }
 .rel .title { display: block; } .rel .sub { color: var(--muted); }
 #player { width: 640px; background: #000; } #player video { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: contain; display: block; }
 #player:fullscreen { width: 100%; display: flex; flex-direction: column; } #player:fullscreen video { flex: 1; min-height: 0; }
@@ -49,7 +52,7 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   .result .title { font-size: 17px; } .grid { gap: 16px 12px; }
   .card { width: calc(50% - 6px); } .card .thumb img, .rel .thumb img, .result .thumb img { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
   .result .thumb { width: 160px; } .rel .thumb { width: 140px; flex: none; }
-  .chead { flex-wrap: wrap; } .banner { max-height: 120px; }
+  #hist-bar { flex-wrap: wrap; gap: 8px 16px; } .chead { flex-wrap: wrap; } .banner { max-height: 120px; }
   .pager { gap: 8px; } .pager a, .quality a, #masthead #logo { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; box-sizing: border-box; }
   summary { padding: 12px 0; } #subs li a { display: inline-flex; align-items: center; min-height: 44px; }
   button, #masthead button { min-height: 44px; min-width: 44px; padding: 0 14px; font-size: 15px; }

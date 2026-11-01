@@ -50,5 +50,9 @@
     720,
     1080
   ],
-  "lang": ""
+  "lang": "",
+  "progress": {
+    "position": 240,
+    "completed": false
+  }
 }

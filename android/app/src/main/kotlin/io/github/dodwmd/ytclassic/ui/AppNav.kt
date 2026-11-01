@@ -89,7 +89,8 @@ fun AppNav(app: App, openVideoId: String? = null) {
     ) { padding ->
         val startDestination = start ?: return@Scaffold
         NavHost(nav, startDestination = startDestination, modifier = Modifier.padding(padding)) {
-            composable("home") { HomeScreen(app.api, openVideo, openChannel) }
+            composable("home") { HomeScreen(app.api, openVideo, openChannel) { nav.navigate("history") } }
+            composable("history") { HistoryScreen(app.api, openVideo) }
             composable("search/{q}", listOf(navArgument("q") { type = NavType.StringType })) { entry ->
                 SearchScreen(app.api, entry.arguments?.getString("q").orEmpty(), openVideo)
             }

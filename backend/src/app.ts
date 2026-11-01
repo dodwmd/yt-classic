@@ -10,11 +10,12 @@ import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { BusyError } from "./limit.ts";
+import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
 const publicDir = fileURLToPath(new URL("../../frontend/public/", import.meta.url));
-const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html" };
+const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html" };
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css",
@@ -48,7 +49,7 @@ function hostAllowed(req: IncomingMessage): boolean {
   return !allowed.length || allowed.includes(req.headers.host ?? "");
 }
 
-async function readForm(req: IncomingMessage, max = 4096): Promise<URLSearchParams | null> {
+async function readText(req: IncomingMessage, max = 4096): Promise<string | null> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -56,7 +57,39 @@ async function readForm(req: IncomingMessage, max = 4096): Promise<URLSearchPara
     if (size > max) return null;
     chunks.push(chunk as Buffer);
   }
-  return new URLSearchParams(Buffer.concat(chunks).toString("utf8"));
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+async function readForm(req: IncomingMessage): Promise<URLSearchParams | null> {
+  const raw = await readText(req);
+  return raw === null ? null : new URLSearchParams(raw);
+}
+
+/** Progress comes as a form (the web page) or JSON (Android); either way only id, position and finished are read. */
+async function readProgress(req: IncomingMessage): Promise<{ id: string; position: number; finished: boolean } | null> {
+  const raw = await readText(req);
+  if (raw === null) return null;
+  let get: (k: string) => unknown;
+  if ((req.headers["content-type"] ?? "").includes("json")) {
+    let o: unknown;
+    try {
+      o = JSON.parse(raw);
+    } catch {
+      o = undefined;
+    }
+    const obj = (o && typeof o === "object" ? o : {}) as Record<string, unknown>;
+    get = (k) => obj[k];
+  } else {
+    const form = new URLSearchParams(raw);
+    get = (k) => form.get(k);
+  }
+  const position = get("position");
+  const fin = get("finished");
+  return {
+    id: typeof get("id") === "string" ? (get("id") as string) : "",
+    position: typeof position === "number" || (typeof position === "string" && position.trim() !== "") ? Number(position) : NaN,
+    finished: fin === true || fin === "1" || fin === "true",
+  };
 }
 
 async function serveFrontend(path: string, res: ServerResponse): Promise<boolean> {
@@ -89,7 +122,7 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
   if (path === "/api/home") {
     const subs = await listSubs();
     const feed = await subscriptionFeed(subs);
-    return json(res, 200, { subs, feed });
+    return json(res, 200, { subs, feed, continue: continueWatching() });
   }
 
   if (path === "/api/search") {
@@ -110,7 +143,55 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     const lang = parseLang(a);
     resolveUrls(id, quality, lang).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
     const related = await relatedFor(v);
-    return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "" });
+    const progress = getProgress(id) ?? undefined; // omitted when nothing is known
+    return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "", progress });
+  }
+
+  if (path === "/api/history" && req.method === "GET") {
+    const limit = Number(param("limit") || 50);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) return json(res, 400, { error: "bad limit" });
+    try {
+      return json(res, 200, listHistory(limit, param("before")));
+    } catch {
+      return json(res, 400, { error: "bad before" });
+    }
+  }
+
+  if (path === "/api/history/watched" && req.method === "GET") {
+    return json(res, 200, { ids: watchedAmong(param("ids").slice(0, 2000).split(",")) });
+  }
+
+  if (path === "/api/progress" && req.method === "POST") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const p = await readProgress(req);
+    if (!p) return json(res, 413, { error: "body too large" });
+    if (!VIDEO_ID.test(p.id)) return json(res, 400, { error: "bad video id" });
+    if (!Number.isFinite(p.position) || p.position < 0) return json(res, 400, { error: "bad position" });
+    p.position = Math.min(p.position, MAX_SECONDS);
+    // Title, channel and duration come from the server's own metadata, never from the request. Only a video that
+    // is not in the history yet (and has been watched for a meaningful time) needs a lookup.
+    let meta = null;
+    if (!isKnown(p.id) && (p.finished || p.position >= MIN_START)) {
+      if (!newRowAllowed()) return json(res, 429, { error: "too many new history entries; try again later" }, { "retry-after": "600" });
+      const v = await video(p.id);
+      if (!v) return json(res, 404, { error: "video not found" });
+      meta = { id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 };
+    }
+    const outcome = recordProgress(p.id, p.position, p.finished, meta);
+    if (outcome === "limited") return json(res, 429, { error: "too many new history entries; try again later" }, { "retry-after": "600" });
+    return json(res, 200, { recorded: outcome === "recorded" });
+  }
+
+  if (path === "/api/history/clear" && req.method === "POST") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    return json(res, 200, { removed: clearHistory() });
+  }
+
+  if (path.startsWith("/api/history/") && req.method === "DELETE") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const id = path.slice("/api/history/".length);
+    if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
+    return json(res, 200, { removed: removeHistory(id) });
   }
 
   if (path.startsWith("/api/channel/")) {

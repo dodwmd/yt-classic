@@ -20,6 +20,11 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   view counts.
 - **Search**: classic results list, paged, using yt-dlp (no API quota).
 - **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar.
+- **Watch history and resume**: the watch page reports your position every ~10 s (and on pause, end and leaving), so a
+  video resumes where you left off across restarts and devices. The home page has a "Continue watching" row with a
+  progress bar, videos watched to the end get a "Watched" badge in the feed, search, channel and related lists, and
+  `/history` lists everything with Remove and "Clear all history". The Android app does the same, also while the app
+  is in the background.
 - **Channel pages**: banner, uploads grid, Subscribe/Unsubscribe (stored locally, no Google login).
 - **Audio language**: prefers English audio on auto-dubbed videos; override per video with `?a=pt`.
 
@@ -35,7 +40,8 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 ```
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
-  unsubscribe) plus the video stream (`/stream/:id`). It contains no HTML.
+  unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
+  `DELETE /api/history/:id`, `POST /api/history/clear`) plus the video stream (`/stream/:id`). It contains no HTML.
 - **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
@@ -99,6 +105,8 @@ rebuilds and restarts. It is a SQLite database in WAL mode, so next to it you wi
 while the backend runs. It holds:
 
 - your **subscriptions** (the data worth backing up);
+- your **watch history** (one row per video: position, duration, completed flag, last watched time, and the title and
+  channel taken from the server's own metadata; at most 5000 rows, oldest pruned first);
 - a **metadata cache** (channel feeds, video and channel details, related videos) that is written through to disk and
   loaded lazily after a restart, so a restart does not re-fetch every subscription's RSS feed or spend API quota.
   Entries keep their normal TTL; expired rows are pruned at start and periodically, and the table is capped at 5000
@@ -188,10 +196,30 @@ Type checking uses **TypeScript 7** (`tsc`, the native compiler). Linting uses *
 
 To update yt-dlp in the dev shell, bump `ytDlpVersion` and its `sha256` in `shell.nix` (the command is in the comment there).
 
+### Watch history and privacy
+
+The history is stored only in your own `yt.db` and is never sent anywhere. It is not tied to an account: anyone who
+can reach your server can read it, like the subscriptions. A video is recorded once you have watched 5 seconds, a
+position is only saved when it moved by at least 2 seconds, and a video counts as watched (completed) when you reach
+within 10 seconds of the end or the player reports it ended. Titles and channels are never taken from the client.
+Trust model: like the subscriptions, the history can be read, removed and cleared by anyone who can reach the API
+(the LAN trust model; an optional access token is planned separately). A still-open playing tab can write an entry
+back after you removed or cleared it; that is accepted. To stop junk from evicting real history, at most 60 *new*
+history rows are accepted per hour (further new videos get HTTP 429 until the window passes; existing rows keep
+updating), positions and durations are capped at 100 hours, and paging uses an opaque `next` cursor passed back as
+`before`. The web page only reports once a video has really started playing.
+To remove entries use the Remove buttons on `/history` (or the Android History screen); **Clear all history** (web
+and Android) deletes everything, or `curl -X POST http://localhost:8080/api/history/clear`.
+
+API notes: `POST /api/progress` takes `id`, `position` (seconds) and optional `finished` as a form or JSON and, like the
+other POSTs, refuses cross-origin requests; `GET /api/video/:id` adds `progress: {position, completed}` when the video
+is in the history; `/api/home` adds `continue` (up to 12 unfinished videos, most recent first).
+
 ## Android app
 
 `android/` is a native Kotlin + Jetpack Compose app that uses the same backend API as the web frontend: home feed,
-search, watch (with the seek bar), channel pages and subscribe/unsubscribe. Playback uses Media3/ExoPlayer.
+search, watch (with the seek bar), channel pages, subscribe/unsubscribe, a "Continue watching" row, watched badges and a
+History screen (Home, "Watch history"). Playback uses Media3/ExoPlayer.
 
 **Build and install** (the Android SDK is large, so it has its own Nix shell, separate from the root one):
 
@@ -326,6 +354,7 @@ backend/
   src/yt/innertube.ts    related videos from YouTube's /next
   src/yt/rss.ts          channel RSS feeds
   src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
+  src/history.ts         watch history and resume positions (SQLite)
   src/store.ts           subscriptions (SQLite, imports the old subscriptions.json)
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
