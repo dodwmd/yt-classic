@@ -1,6 +1,7 @@
 package io.github.dodwmd.ytclassic.player
 
 import androidx.annotation.OptIn
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -29,10 +30,17 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
@@ -42,6 +50,7 @@ import androidx.media3.ui.PlayerView
 import io.github.dodwmd.ytclassic.data.VideoDetail
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.formatSeconds
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -58,6 +67,7 @@ fun StreamPlayer(
     qualities: List<Int>,
     lang: String,
     startSeconds: Long,
+    onPosition: (Long) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -68,22 +78,36 @@ fun StreamPlayer(
     var isPlaying by remember(video.id) { mutableStateOf(false) }
     var buffering by remember(video.id) { mutableStateOf(true) }
     var error by remember(video.id) { mutableStateOf<String?>(null) }
+    var finished by remember(video.id) { mutableStateOf(false) }
     var dragging by remember(video.id) { mutableStateOf<Float?>(null) }
 
-    val player = remember(video.id) { ExoPlayer.Builder(context).build() }
+    val player = remember(video.id) {
+        ExoPlayer.Builder(context)
+            // Take audio focus (pause for calls, duck for prompts, stop other media) and pause when headphones are unplugged.
+            .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
+            .setHandleAudioBecomingNoisy(true)
+            .build()
+    }
     val scope = rememberCoroutineScope()
+    var loading by remember(video.id) { mutableStateOf<Job?>(null) }
 
     fun load(at: Long, q: Int = quality) {
         error = null
+        finished = false
         buffering = true
         val start = seek.restartAt(at)
         positionSec = start
-        scope.launch {
-            player.setMediaItem(MediaItem.fromUri(api.streamUrl(video.id, q, start, lang)))
+        // Only the newest request may reach the player: a quick second seek must not be overtaken by the first.
+        loading?.cancel()
+        loading = scope.launch {
+            val url = api.streamUrl(video.id, q, start, lang)
+            player.setMediaItem(MediaItem.fromUri(url))
             player.prepare()
             player.playWhenReady = true
         }
     }
+
+    fun savePosition() = onPosition(if (finished) 0 else seek.position(player.currentPosition))
 
     DisposableEffect(player) {
         val listener = object : Player.Listener {
@@ -93,6 +117,16 @@ fun StreamPlayer(
 
             override fun onPlaybackStateChanged(state: Int) {
                 buffering = state == Player.STATE_BUFFERING
+                if (state == Player.STATE_ENDED) {
+                    // A finished stream and one the backend cut short both end here; only the position tells them apart.
+                    if (seek.endedEarly(player.currentPosition)) {
+                        positionSec = seek.position(player.currentPosition)
+                        error = "The stream stopped early."
+                    } else {
+                        finished = true
+                        positionSec = total
+                    }
+                }
             }
 
             override fun onPlayerError(e: PlaybackException) {
@@ -103,21 +137,28 @@ fun StreamPlayer(
         player.addListener(listener)
         load(startSeconds)
         onDispose {
+            savePosition()
             player.removeListener(listener)
             player.release()
         }
     }
-    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { player.pause() } // no background playback in v1
+    LifecycleEventEffect(Lifecycle.Event.ON_STOP) { // no background playback in v1
+        player.pause()
+        savePosition() // the process may be killed while we're in the background
+    }
 
     LaunchedEffect(player) {
         while (true) {
-            if (dragging == null) positionSec = seek.position(player.currentPosition)
+            if (dragging == null && !finished) positionSec = seek.position(player.currentPosition)
             delay(500)
         }
     }
 
     Column(modifier) {
-        Box(Modifier.fillMaxWidth().aspectRatio(16f / 9f).background(Color.Black)) {
+        // In landscape a full-width 16:9 box would fill the screen; cap its height so the details stay reachable.
+        val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.6f).toDp() }
+        Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
+          Box(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f)) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
                 update = { it.player = player },
@@ -130,9 +171,13 @@ fun StreamPlayer(
                     Button(onClick = { load(positionSec) }) { Text("Retry") }
                 }
             }
+          }
         }
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { if (isPlaying) player.pause() else player.play() }) { Text(if (isPlaying) "❚❚" else "▶") }
+            TextButton(
+                onClick = { if (finished) load(0) else if (isPlaying) player.pause() else player.play() },
+                modifier = Modifier.semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
+            ) { Text(if (finished) "↻" else if (isPlaying) "❚❚" else "▶") }
             if (total > 0) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
@@ -142,7 +187,10 @@ fun StreamPlayer(
                         dragging = null
                     },
                     valueRange = 0f..total.toFloat(),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).semantics {
+                        contentDescription = "Seek"
+                        stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}"
+                    },
                 )
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", modifier = Modifier.padding(end = 8.dp))
             }

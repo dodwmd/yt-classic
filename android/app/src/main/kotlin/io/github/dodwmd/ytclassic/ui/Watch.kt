@@ -13,6 +13,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -26,13 +27,16 @@ import io.github.dodwmd.ytclassic.player.StreamPlayer
 
 @Composable
 fun WatchScreen(api: YtApi, id: String, startSeconds: Long, onVideo: (String) -> Unit, onChannel: (String) -> Unit) {
+    // Survives leaving the screen and coming back (or the process being killed), so a detour doesn't lose your place.
+    // A LongArray rather than state: it's written every few seconds and nothing should recompose for it.
+    val resume = rememberSaveable(id) { longArrayOf(startSeconds) }
     val loaded = rememberLoad(id) { api.video(id) }
     LoadedContent(loaded) { r ->
         val v = r.video
         var expanded by remember(v.id) { mutableStateOf(false) }
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
-            StreamPlayer(api, v, r.quality, r.qualities, r.lang, startSeconds)
+            StreamPlayer(api, v, r.quality, r.qualities, r.lang, resume[0], onPosition = { resume[0] = it })
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {

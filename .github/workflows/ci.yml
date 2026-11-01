@@ -77,7 +77,7 @@ jobs:
       - name: Accept SDK licenses (the runner's SDK is writable, so Gradle can fetch what's missing)
         run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
       - name: Unit tests, lint and debug APK
-        run: ./gradlew --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+        run: ./gradlew --console=plain :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleRelease
       - name: Upload lint results to the Security tab
         if: ${{ !cancelled() && hashFiles('android/app/build/reports/lint-results-debug.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
