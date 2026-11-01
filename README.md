@@ -190,7 +190,7 @@ The backend logs the yt-dlp version at start.
 
 ### Status and health
 
-`GET /api/status` (same host allow-list as the other `/api` routes; no secrets, URLs or paths) returns:
+`GET /api/status` (same host allow-list and, if set, access token as the other `/api` routes; no secrets, URLs or paths) returns:
 
 ```json
 { "health": "ok",

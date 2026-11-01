@@ -168,6 +168,20 @@ test("/status is a script-free HTML page with the same fields, escaped", async (
   assert.ok(statusPage({ x: "<b>" }).includes("x: &#60;b&#62;"));
 });
 
+test("with ACCESS_TOKEN set, /api/status needs it and /status sends visitors to the login page", async () => {
+  const token = "status-test-token-0123456789";
+  process.env.ACCESS_TOKEN = token;
+  try {
+    assert.equal((await fetch(`${base}/api/status`)).status, 401);
+    const page = await fetch(`${base}/status`, { redirect: "manual" });
+    assert.equal(page.status, 303);
+    assert.equal(page.headers.get("location"), "/login?next=%2Fstatus");
+    assert.equal((await fetch(`${base}/api/status`, { headers: { authorization: `Bearer ${token}` } })).status, 200);
+  } finally {
+    delete process.env.ACCESS_TOKEN;
+  }
+});
+
 test("host allow-list applies to /api/status and /status", async () => {
   process.env.ALLOWED_HOSTS = "only.example";
   try {
