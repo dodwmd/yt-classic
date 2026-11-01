@@ -11,13 +11,35 @@ const read = (p) => readFileSync(join(PUBLIC, p), "utf8");
 const jsFiles = readdirSync(join(PUBLIC, "js")).filter((f) => f.endsWith(".js"));
 const htmlFiles = readdirSync(PUBLIC).filter((f) => f.endsWith(".html"));
 
-// Total shipped JavaScript, gzipped. Raise it deliberately, in a reviewed change, if you really need to.
+// What a page actually downloads is its own module plus everything it imports, so the budget is per page: the
+// gzipped size of each file in the page's import graph, summed. Raise it deliberately, in a reviewed change, if
+// you really need to. (A total across all files would make every new page compete with every other page.)
 const BUDGET_GZIP_BYTES = 8 * 1024;
 
-test("total JavaScript stays within the size budget", () => {
-  const total = jsFiles.reduce((n, f) => n + gzipSync(readFileSync(join(PUBLIC, "js", f))).length, 0);
-  console.log(`# JS: ${jsFiles.length} files, ${total} bytes gzipped (budget ${BUDGET_GZIP_BYTES})`);
-  assert.ok(total <= BUDGET_GZIP_BYTES, `JS is ${total} bytes gzipped, budget is ${BUDGET_GZIP_BYTES}`);
+function importGraph(entry, seen = new Set()) {
+  if (seen.has(entry)) return seen;
+  seen.add(entry);
+  for (const m of read(`js/${entry}`).matchAll(/\bfrom\s+"\.\/([\w.-]+\.js)"/g)) importGraph(m[1], seen);
+  return seen;
+}
+const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
+
+test("JavaScript per page stays within the size budget", () => {
+  const entries = new Map(); // page -> entry module
+  for (const f of htmlFiles) {
+    const src = /<script\b[^>]*\bsrc="\/static\/js\/([\w.-]+\.js)"/i.exec(read(f))?.[1];
+    if (src) entries.set(f, src);
+  }
+  assert.ok(entries.size >= 5, "expected several pages with scripts");
+  for (const [page, entry] of entries) {
+    const files = [...importGraph(entry)];
+    const total = files.reduce((n, f) => n + gz(f), 0);
+    console.log(`# JS ${page}: ${files.join(" + ")} = ${total} bytes gzipped (budget ${BUDGET_GZIP_BYTES})`);
+    assert.ok(total <= BUDGET_GZIP_BYTES, `${page} ships ${total} bytes of JS gzipped, budget is ${BUDGET_GZIP_BYTES}`);
+  }
+  // Every script is reachable from some page (no orphaned code quietly accumulating).
+  const reachable = new Set([...entries.values()].flatMap((e) => [...importGraph(e)]));
+  for (const f of jsFiles) assert.ok(reachable.has(f), `${f} is not used by any page`);
 });
 
 test("no HTML-injection or dynamic-code sinks in the JS", () => {
