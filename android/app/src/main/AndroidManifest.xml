@@ -8,6 +8,8 @@
 
     <!-- Background audio: a mediaPlayback foreground service shows the media notification; the notification
          permission is optional (playback and the service work without it, only the notification is hidden). -->
+    <!-- WAKE_LOCK: ExoPlayer holds a CPU/Wi-Fi lock while streaming with the screen off (setWakeMode). -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -24,6 +26,8 @@
         android:theme="@style/Theme.YtClassic"
         android:usesCleartextTraffic="true">
 
+        <!-- configChanges: orientation/size/keyboard as before; uiMode (dark mode), locale, layoutDirection, fontScale and
+             density are handled by recomposition so changing them does not recreate the activity and restart the video. -->
         <activity
             android:name=".MainActivity"
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode|locale|layoutDirection|fontScale|density"

@@ -228,8 +228,10 @@ bar. Android 13+ asks for notification permission the first time something plays
 continues, only the notification is hidden. The player lives in a foreground service (`mediaPlayback`) and ends, with
 its notification, when the video finishes, when you stop it (or dismiss the notification), when it fails while the app
 is in the background, or when you swipe the app away while paused. Leaving the watch screen with the app open still
-stops playback. Settings has **Keep playing in the background** (on by default); turn it off to pause whenever the app
-goes to the background.
+stops playback. Settings has **Keep playing in the background** (on by default); turn it off and the app pauses and
+removes the notification whenever it goes to the background. Headset and Bluetooth buttons only work while the
+service is alive: it is stopped after the video finishes, after you stop it, after an error in the background, and (with
+the setting off) whenever the app is in the background, so open the app and press Play again.
 
 **Not yet:** picture-in-picture, offline downloads, Play Store publishing.
 

@@ -1,10 +1,15 @@
 package io.github.dodwmd.ytclassic.player
 
 import android.app.PendingIntent
+import androidx.annotation.OptIn
+import androidx.media3.common.util.UnstableApi
 import android.content.Intent
+import androidx.media3.common.MediaItem
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import io.github.dodwmd.ytclassic.App
+import com.google.common.util.concurrent.Futures
+import com.google.common.util.concurrent.ListenableFuture
 import io.github.dodwmd.ytclassic.MainActivity
 
 /**
@@ -24,8 +29,22 @@ class PlaybackService : MediaSessionService() {
                 .putExtra(MainActivity.EXTRA_OPEN_PLAYING, true),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
         )
-        session = MediaSession.Builder(this, (application as App).host.player).setSessionActivity(open).build()
+        session = MediaSession.Builder(this, (application as App).host.player).setSessionActivity(open).setCallback(Guard()).build()
         addSession(session!!) // so Media3 builds the notification and runs the service in the foreground
+    }
+
+    /** Only the system's media controls and this app may connect, with [allowedControllerCommands]; items can't be replaced. */
+    @OptIn(UnstableApi::class)
+    private inner class Guard : MediaSession.Callback {
+        override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
+            if (controller.packageName == packageName || controller.isTrusted || session.isMediaNotificationController(controller)) {
+                MediaSession.ConnectionResult.AcceptedResultBuilder(session).setAvailablePlayerCommands(allowedControllerCommands()).build()
+            } else {
+                MediaSession.ConnectionResult.reject()
+            }
+
+        override fun onAddMediaItems(session: MediaSession, controller: MediaSession.ControllerInfo, mediaItems: List<MediaItem>): ListenableFuture<List<MediaItem>> =
+            Futures.immediateFailedFuture(UnsupportedOperationException("The stream is chosen by the app"))
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo) = session
