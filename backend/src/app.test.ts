@@ -92,6 +92,12 @@ test("basic routing and validation", async () => {
   assert.equal((await get("/api/nope")).status, 404);
 });
 
+test("/api/home returns exactly the subscriptions and the feed (no suggestion rows)", async () => {
+  const r = await get("/api/home");
+  assert.equal(r.status, 200);
+  assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["feed", "subs"]);
+});
+
 test("search returns JSON with raw (unescaped) data; escaping is the frontend's job", async () => {
   const r = await get("/api/search?q=nix");
   assert.equal(r.status, 200);

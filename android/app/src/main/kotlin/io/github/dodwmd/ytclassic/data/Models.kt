@@ -73,7 +73,6 @@ data class RelatedList(val heading: String = "", val items: List<RelatedItem> = 
 data class HomeResponse(
     val subs: List<Sub> = emptyList(),
     val feed: List<FeedItem> = emptyList(),
-    val recs: List<RelatedItem> = emptyList(),
 )
 
 @Serializable
