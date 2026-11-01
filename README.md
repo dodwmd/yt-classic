@@ -273,7 +273,8 @@ frontend/
   public/classic.css     the classic look; follows the system light/dark setting
   public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
-  nginx.conf             page routes, security headers, reverse proxy for /api and /stream
+  nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
+  05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line
 android/                 the native Android app (Kotlin + Compose); has its own shell.nix and Gradle wrapper
 compose.yaml             runs both containers
 shell.nix                dev shell
