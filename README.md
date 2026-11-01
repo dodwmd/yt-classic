@@ -4,7 +4,8 @@ A personal, self-hosted YouTube frontend that recreates the look of "classic" Yo
 keeps its JavaScript **small and purposeful**. All the HTML lives in `frontend/` as plain pages with `<template>`
 blocks; a few hundred lines of vanilla JS (about 6 KB gzipped in total) fetch JSON from the backend and fill those
 templates in. No framework, no bundler, no third-party scripts, no tracking. The JS size and safety rules are
-enforced by tests (see [CI/CD](#cicd)).
+enforced by tests (see [CI/CD](#cicd)). There is also a native [Android app](#android-app) that talks to the same
+backend.
 
 Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
@@ -147,6 +148,48 @@ Type checking uses **TypeScript 7** (`tsc`, the native compiler). Linting uses *
 
 To update yt-dlp in the dev shell, bump `ytDlpVersion` and its `sha256` in `shell.nix` (the command is in the comment there).
 
+## Android app
+
+`android/` is a native Kotlin + Jetpack Compose app that uses the same backend API as the web frontend: home feed,
+search, watch (with the seek bar), channel pages and subscribe/unsubscribe. Playback uses Media3/ExoPlayer.
+
+**Build and install** (the Android SDK is large, so it has its own Nix shell, separate from the root one):
+
+```bash
+nix-shell android/shell.nix                       # JDK 17, the SDK (platform 37), adb
+cd android && ./gradlew :app:assembleDebug        # -> app/build/outputs/apk/debug/app-debug.apk
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+CI also builds the debug APK on pull requests that touch `android/` and attaches it to the run as an artifact.
+
+**First launch:** open Settings (the gear) and enter the backend's address, for example `192.168.1.153:8080` on home
+Wi-Fi, or its VPN host name when you're away, then **Test connection** and **Save**. The app uses plain `http://`
+(cleartext is allowed for this reason) and the backend has no login, so only use networks you trust.
+
+**How it works:** the backend's video stream is a live remux that can't be seeked, so the app knows the real duration
+from the API and *restarts* the stream at `?t=<seconds>` when you drag the seek bar or change quality (the web
+player does the same). Expect a second or two of buffering after a seek.
+
+**Not in v1:** background audio, picture-in-picture, fullscreen/landscape layout, offline downloads, a release-signed
+build (debug APKs are for sideloading only).
+
+**Testing it without a phone:** the shell can add an emulator (needs KVM, about 2 GB more):
+
+```bash
+nix-shell android/shell.nix --arg withEmulator true
+# create an AVD once: avdmanager create avd -n yt -k 'system-images;android-36;google_apis;x86_64' -d pixel_6
+emulator -avd yt -no-window -gpu swiftshader_indirect &     # drop -no-window to see it
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell am start -n io.github.dodwmd.ytclassic/.MainActivity --es server 10.0.2.2:8080   # debug builds only
+```
+
+`10.0.2.2` is the host machine as seen from the emulator. `./gradlew :app:testDebugUnitTest :app:lintDebug` runs
+the unit tests (API parsing against real captured responses, formatters, seek logic) and Android lint.
+
+**Note on the SDK:** the newest Android libraries need `compileSdk` 37, which this nixpkgs snapshot doesn't ship yet,
+so `android/shell.nix` adds platform 37 from Google as a hash-pinned download. Once nixpkgs has it, that block can go.
+
 ## Configuration
 
 Environment variables, read from `backend/.env` in dev and in compose:
@@ -196,7 +239,8 @@ GitHub Actions, in `.github/workflows/`:
     script looks up exists in its HTML;
   - CodeQL static analysis;
   - security: gitleaks over the full history, `npm audit`, dependency review, hadolint on the Containerfiles;
-  - `docker compose build`.
+  - `docker compose build`;
+  - Android build, unit tests and lint (only when `android/` changed), with the debug APK attached to the run.
 - **`cd.yml`** is a placeholder (manual trigger, does nothing). There is no deployment target yet.
 - Dependabot proposes weekly updates for the backend and frontend npm packages and for the actions themselves.
 
@@ -222,6 +266,7 @@ frontend/
   public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream
+android/                 the native Android app (Kotlin + Compose); has its own shell.nix and Gradle wrapper
 compose.yaml             runs both containers
 shell.nix                dev shell
 ```

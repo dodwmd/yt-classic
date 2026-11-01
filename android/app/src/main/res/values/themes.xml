@@ -1,0 +1,8 @@
+<resources>
+    <!-- Only the window theme; all UI is Compose. -->
+    <style name="Theme.YtClassic" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@android:color/white</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+</resources>

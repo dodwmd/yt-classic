@@ -1,0 +1,58 @@
+package io.github.dodwmd.ytclassic.ui
+
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import io.github.dodwmd.ytclassic.data.YtApi
+import io.github.dodwmd.ytclassic.data.formatViews
+import io.github.dodwmd.ytclassic.data.joinParts
+import io.github.dodwmd.ytclassic.data.timeAgo
+import io.github.dodwmd.ytclassic.player.StreamPlayer
+
+@Composable
+fun WatchScreen(api: YtApi, id: String, startSeconds: Long, onVideo: (String) -> Unit, onChannel: (String) -> Unit) {
+    val loaded = rememberLoad(id) { api.video(id) }
+    LoadedContent(loaded) { r ->
+        val v = r.video
+        var expanded by remember(v.id) { mutableStateOf(false) }
+        Column(Modifier.fillMaxWidth()) {
+            // The player stays pinned at the top; everything else scrolls underneath it.
+            StreamPlayer(api, v, r.quality, r.qualities, r.lang, startSeconds)
+            LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+                item {
+                    Column(Modifier.padding(12.dp)) {
+                        Text(v.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        Text(
+                            joinParts(v.channelTitle, timeAgo(v.publishedAt), formatViews(v.views)),
+                            color = LinkBlue,
+                            modifier = Modifier.clickable(enabled = v.channelId.isNotEmpty()) { onChannel(v.channelId) }.padding(vertical = 6.dp),
+                        )
+                        if (v.description.isNotBlank()) {
+                            Text(
+                                v.description, color = Muted, maxLines = if (expanded) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.clickable { expanded = !expanded },
+                            )
+                        }
+                    }
+                }
+                if (r.related.items.isNotEmpty()) item { SectionTitle(r.related.heading.ifBlank { "Related videos" }) }
+                items(r.related.items, key = { it.id }) { RelatedRow(it, onVideo, thumbWidth = 140) }
+            }
+        }
+    }
+}
