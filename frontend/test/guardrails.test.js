@@ -67,3 +67,27 @@ test("every template and element a page script looks up exists in its HTML", () 
     }
   }
 });
+
+// Mobile rules must never leak into the desktop layout, and zooming must stay possible.
+test("every rule after the 'Small screens' marker in classic.css is inside an @media block", () => {
+  const css = read("classic.css");
+  const at = css.indexOf("Small screens");
+  assert.ok(at > 0, "marker comment 'Small screens' is missing");
+  const rest = css.slice(css.lastIndexOf("/*", at)).replace(/\/\*[\s\S]*?\*\//g, "");
+  let depth = 0, top = "";
+  for (const ch of rest) {
+    if (ch === "{") { if (depth === 0) assert.match(top.trim(), /^@media\b/, `rule outside @media: ${top.trim()}`); depth++; top = ""; }
+    else if (ch === "}") { depth--; assert.ok(depth >= 0, "unbalanced braces"); top = ""; }
+    else if (depth === 0) top += ch;
+  }
+  assert.equal(depth, 0, "unbalanced braces");
+  assert.equal(top.trim(), "", "stray text at top level");
+});
+
+test("viewport meta allows zooming on every page", () => {
+  for (const f of htmlFiles) {
+    const m = read(f).match(/<meta name="viewport" content="([^"]*)"/);
+    assert.ok(m, `${f} has no viewport meta`);
+    assert.doesNotMatch(m[1], /user-scalable|maximum-scale/i, `${f} blocks zoom`);
+  }
+});
