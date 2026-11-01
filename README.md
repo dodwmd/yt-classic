@@ -171,8 +171,14 @@ Wi-Fi, or its VPN host name when you're away, then **Test connection** and **Sav
 from the API and *restarts* the stream at `?t=<seconds>` when you drag the seek bar or change quality (the web
 player does the same). Expect a second or two of buffering after a seek.
 
-**Not in v1:** background audio, picture-in-picture, fullscreen/landscape layout, offline downloads, a release-signed
-build (debug APKs are for sideloading only).
+**Releases:** every merge to `main` publishes a signed release APK to
+[GitHub Releases](../../releases) (`cd.yml`, tag `v<versionName>-<run number>`). Download it on your phone and allow
+"Install unknown apps" for your browser. All releases are signed with the same key, so each one installs over the last.
+The key comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
+and `ANDROID_KEY_PASSWORD`; keep a backup of the keystore, because losing it means a new install is needed.
+
+**Not in v1:** background audio, picture-in-picture, fullscreen/landscape layout, offline downloads, Play Store
+publishing.
 
 **Testing it without a phone:** the shell can add an emulator (needs KVM, about 2 GB more):
 
