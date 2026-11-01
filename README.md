@@ -107,7 +107,27 @@ while the backend runs. It holds:
   search results are never persisted. The cache is disposable: if it cannot be read or written, the backend logs it
   and carries on from memory.
 
-The database files are created owner-only (0600; a data directory the backend creates is 0700). Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start.
+The database files are created owner-only (0600; a data directory the backend creates is 0700). Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start. (Node prints a one-line "SQLite is an experimental feature" warning in development; the container start command silences it.)
+
+*Upgrading:* an existing `subscriptions.json` is imported automatically on first start and renamed to
+`subscriptions.json.migrated`. Copy `subscriptions.json` somewhere safe before upgrading. To roll back to an older
+image, copy `subscriptions.json.migrated` back to `subscriptions.json`; the old version reads only that file, so
+changes made after the upgrade are lost. A damaged `subscriptions.json` is moved aside as
+`subscriptions.json.corrupt-<time>` and the site starts with an empty list instead of failing. Likewise a damaged
+`yt.db` is moved aside as `yt.db.corrupt-<time>` (with its `-wal`/`-shm`) and a fresh one is created. The backend opens
+the database at start, logs `DATABASE UNAVAILABLE` if it cannot, and `/healthz` (the container health check) answers
+503 until it works.
+
+*Backup:* the cache is disposable, so only the subscriptions matter (`sqlite3 yt.db "DELETE FROM cache"` shrinks a
+backup, and `yt.db` can even be deleted to drop the cache, though that also drops subscriptions). To back up while
+the backend runs, use SQLite's own tools (`sqlite3` is in the dev shell):
+`sqlite3 backend/data/yt.db ".backup backup.db"` (or `VACUUM INTO 'backup.db'`). Do not copy `yt.db` alone while it
+is running: recent changes may still be in the `-wal` file. With the backend stopped
+(`podman-compose stop backend`; a clean stop checkpoints the WAL), copying `yt.db` is enough.
+*Restore:* stop the backend, delete `yt.db-wal` and `yt.db-shm`, copy the backup over `yt.db`, start it.
+The file is not auto-vacuumed, so it does not shrink when rows are deleted (it is reused instead).
+
+The database files are created owner-only (0600; a data directory the backend creates is 0700). Schema changes are versioned migrations (`backend/src/db.ts`) applied automatically at start. (Node prints a one-line "SQLite is an experimental feature" warning in development; the container start command silences it.)
 
 *Upgrading:* an existing `subscriptions.json` is imported automatically on first start and renamed to
 `subscriptions.json.migrated` (keep it as a backup, or delete it). A damaged file is moved aside as

@@ -1,7 +1,15 @@
 import { createApp } from "./app.ts";
 import { execFile } from "node:child_process";
 import { killChildren } from "./yt/dlp.ts";
-import { closeDb } from "./db.ts";
+import { closeDb, getDb } from "./db.ts";
+
+// Open (and migrate / import) eagerly so a problem shows at start-up, not on the first request. Not fatal:
+// /healthz reports 503 while it is broken, and later requests retry the open.
+try {
+  getDb();
+} catch (e) {
+  console.error(`DATABASE UNAVAILABLE at start-up: ${(e as Error).message}`);
+}
 
 const port = Number(process.env.PORT ?? 3000);
 const server = createApp();
@@ -17,7 +25,8 @@ for (const sig of ["SIGTERM", "SIGINT"] as const) {
     shuttingDown = true;
     console.log(`${sig} received, shutting down`);
     killChildren(); // don't leave ffmpeg/yt-dlp behind
-    const done = () => (closeDb(true), process.exit(0)); // final: late requests cannot reopen it // checkpoint the WAL before leaving
+    // Final close checkpoints the WAL and stops late requests from reopening the database.
+    const done = () => (closeDb(true), process.exit(0));
     server.close(done);
     server.closeAllConnections();
     setTimeout(done, 2000).unref();

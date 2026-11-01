@@ -60,10 +60,11 @@ let writes = 0;
 function writeDisk(key: string, val: unknown, exp: number): void {
   try {
     const json = JSON.stringify(val);
-    if (json === undefined || Buffer.byteLength(json) > MAX_VALUE_BYTES) return;
+    const size = json === undefined ? 0 : Buffer.byteLength(json);
+    if (json === undefined || size > MAX_VALUE_BYTES) return;
     const db = getDb();
     const now = Date.now();
-    stmt(db, "INSERT OR REPLACE INTO cache (key, val, exp, used) VALUES (?, ?, ?, ?)").run(key, json, exp, now);
+    stmt(db, "INSERT OR REPLACE INTO cache (key, val, exp, used, size) VALUES (?, ?, ?, ?, ?)").run(key, json, exp, now, size);
     if (++writes % PRUNE_EVERY === 0) pruneDisk();
   } catch (e) {
     diskFailed("write", e);
@@ -101,7 +102,7 @@ export function pruneDisk(maxRows = MAX_ROWS, maxBytes = MAX_TOTAL_BYTES): numbe
            SELECT key FROM (
              SELECT key,
                ROW_NUMBER() OVER w AS n,
-               SUM(length(CAST(val AS BLOB))) OVER (w ROWS UNBOUNDED PRECEDING) AS bytes
+               SUM(size) OVER (w ROWS UNBOUNDED PRECEDING) AS bytes
              FROM cache
              WINDOW w AS (ORDER BY (key LIKE 'rss:%') DESC, used DESC, key)
            ) WHERE n > ? OR bytes > ?

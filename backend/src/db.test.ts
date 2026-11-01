@@ -4,8 +4,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { MIGRATIONS, closeDb, getDb, migrate, openDb } from "./db.ts";
-import { writeFileSync } from "node:fs";
+import { MIGRATIONS, closeDb, getDb, migrate, openDb, pingDb } from "./db.ts";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 
 let dir = "";
 beforeEach(() => {
@@ -33,19 +33,19 @@ test("migrations apply and are idempotent", () => {
 test("later migrations are applied on top, in order, once", () => {
   const db = new DatabaseSync(":memory:");
   migrate(db);
-  const extra = [...MIGRATIONS, { version: 2, sql: "CREATE TABLE history (id TEXT PRIMARY KEY)" }];
-  assert.equal(migrate(db, extra), 2);
-  assert.equal(migrate(db, extra), 2);
-  assert.deepEqual(versions(db), [1, 2]);
+  const extra = [...MIGRATIONS, { version: 99, sql: "CREATE TABLE history (id TEXT PRIMARY KEY)" }];
+  assert.equal(migrate(db, extra), 99);
+  assert.equal(migrate(db, extra), 99);
+  assert.deepEqual(versions(db), [...MIGRATIONS.map((m) => m.version), 99]);
   db.close();
 });
 
 test("a failing migration rolls back and is not recorded", () => {
   const db = new DatabaseSync(":memory:");
   migrate(db);
-  const bad = [...MIGRATIONS, { version: 2, sql: "CREATE TABLE ok (a); CREATE TABLE ok (b);" }];
-  assert.throws(() => migrate(db, bad), /migration 2 failed/);
-  assert.deepEqual(versions(db), [1]);
+  const bad = [...MIGRATIONS, { version: 99, sql: "CREATE TABLE ok (a); CREATE TABLE ok (b);" }];
+  assert.throws(() => migrate(db, bad), /migration 99 failed/);
+  assert.deepEqual(versions(db), MIGRATIONS.map((m) => m.version));
   assert.equal(db.prepare("SELECT name FROM sqlite_master WHERE name = 'ok'").get(), undefined);
   db.close();
 });
@@ -97,4 +97,44 @@ test("a DATA_DIR that is a file is a clear error", () => {
   writeFileSync(f, "x");
   process.env.DATA_DIR = f;
   assert.throws(() => getDb(), /cannot open the database/);
+});
+
+test("migration 2 backfills the size of existing cache rows", () => {
+  const db = new DatabaseSync(":memory:");
+  migrate(db, MIGRATIONS.slice(0, 1));
+  db.prepare("INSERT INTO cache (key, val, exp, used) VALUES ('k', ?, 1, 1)").run("\u00e9\u00e9");
+  migrate(db);
+  assert.equal((db.prepare("SELECT size FROM cache WHERE key = 'k'").get() as { size: number }).size, 4);
+  db.close();
+});
+
+test("a damaged database is moved aside and a fresh one is created", () => {
+  writeFileSync(join(dir, "yt.db"), "this is definitely not a sqlite database, just text padding".repeat(20));
+  const real = console.error;
+  const logged: string[] = [];
+  console.error = (m: string) => void logged.push(String(m));
+  try {
+    const db = getDb();
+    db.prepare("INSERT INTO meta (key, value) VALUES ('k', 'v')").run();
+    assert.ok(logged.some((m) => m.includes("moved to") && m.includes("yt.db.corrupt-")));
+  } finally {
+    console.error = real;
+  }
+  const names = readdirSync(dir);
+  assert.ok(names.some((n) => /^yt\.db\.corrupt-\d+$/.test(n)), "main file kept");
+  assert.ok(existsSync(join(dir, "yt.db")));
+});
+
+test("an unwritable or non-corrupt failure is not treated as corruption", () => {
+  const f = join(dir, "file");
+  writeFileSync(f, "x");
+  process.env.DATA_DIR = f;
+  assert.throws(() => getDb());
+  assert.deepEqual(readdirSync(dir), ["file"]);
+});
+
+test("pingDb works on a healthy database and throws on a broken one", () => {
+  pingDb();
+  closeDb(true);
+  assert.throws(() => pingDb(), /closed/);
 });

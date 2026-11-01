@@ -103,7 +103,7 @@ test("failures are not persisted", async () => {
 });
 
 const seed = (key: string, used: number, size = 10, exp = Date.now() + 3_600_000) =>
-  getDb().prepare("INSERT OR REPLACE INTO cache (key, val, exp, used) VALUES (?, ?, ?, ?)").run(key, JSON.stringify("x".repeat(size - 2)), exp, used);
+  getDb().prepare("INSERT OR REPLACE INTO cache (key, val, exp, used, size) VALUES (?, ?, ?, ?, ?)").run(key, JSON.stringify("x".repeat(size - 2)), exp, used, size);
 const keys = () => (getDb().prepare("SELECT key FROM cache ORDER BY key").all() as { key: string }[]).map((r) => r.key);
 
 test("pruning removes expired rows and keeps the most recently used ones", () => {
@@ -134,7 +134,7 @@ test("pruning enforces the total byte budget, counting bytes not characters", ()
 
 test("the byte budget counts bytes, not characters", () => {
   seed("narrow", 4, 100);
-  getDb().prepare("INSERT INTO cache (key, val, exp, used) VALUES ('wide', ?, ?, 9)").run("\u00e9".repeat(100), Date.now() + 1e6); // 100 chars, 200 bytes
+  getDb().prepare("INSERT INTO cache (key, val, exp, used, size) VALUES ('wide', ?, ?, 9, 200)").run("\u00e9".repeat(100), Date.now() + 1e6); // 100 chars, 200 bytes
   pruneDisk(100, 250);
   assert.deepEqual(keys(), ["wide"]); // 300 bytes in total; 200 characters would have fit
 });
@@ -189,4 +189,11 @@ test("a broken database never breaks a request", async () => {
   } finally {
     console.error = real;
   }
+});
+
+test("the persisted size column is the byte length of the value", async () => {
+  await cached("sz", 60_000, async () => "\u00e9".repeat(50), true);
+  const row = getDb().prepare("SELECT size, length(CAST(val AS BLOB)) AS bytes FROM cache WHERE key = 'sz'").get() as { size: number; bytes: number };
+  assert.equal(row.size, 102);
+  assert.equal(row.size, row.bytes);
 });

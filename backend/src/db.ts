@@ -1,4 +1,4 @@
-import { chmodSync, mkdirSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, renameSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
 
@@ -33,6 +33,14 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX cache_used ON cache (used);
     `,
   },
+  {
+    // Byte size per row, so the budget prune never has to read the values.
+    version: 2,
+    sql: `
+      ALTER TABLE cache ADD COLUMN size INTEGER NOT NULL DEFAULT 0;
+      UPDATE cache SET size = length(CAST(val AS BLOB));
+    `,
+  },
 ];
 
 /**
@@ -65,19 +73,29 @@ export function migrate(db: DatabaseSync, migrations: Migration[] = MIGRATIONS, 
   return current;
 }
 
+const pause = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+const isBusy = (e: unknown) => /locked|busy/i.test((e as Error).message ?? "");
+
+/**
+ * Opens and prepares the database. Switching a brand-new file to WAL can fail with "database is locked" without
+ * honouring the busy timeout when another process is doing the same, so a busy open is simply retried.
+ */
 export function openDb(path: string): DatabaseSync {
-  const db = new DatabaseSync(path);
-  try {
-    db.exec("PRAGMA busy_timeout = 5000"); // first, so the pragmas below also wait for a competing opener
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA synchronous = NORMAL"); // safe with WAL; a crash may lose the last commits, never corrupt
-    db.exec("PRAGMA foreign_keys = ON");
-    migrate(db);
-  } catch (e) {
-    db.close();
-    throw e;
+  for (let attempt = 1; ; attempt++) {
+    const db = new DatabaseSync(path);
+    try {
+      db.exec("PRAGMA busy_timeout = 5000"); // first, so the pragmas below also wait for a competing opener
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("PRAGMA synchronous = NORMAL"); // safe with WAL; a crash may lose the last commits, never corrupt
+      db.exec("PRAGMA foreign_keys = ON");
+      migrate(db);
+      return db;
+    } catch (e) {
+      db.close();
+      if (!isBusy(e) || attempt >= 40) throw e;
+      pause(10 + Math.floor(Math.random() * 40));
+    }
   }
-  return db;
 }
 
 const statements = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
@@ -131,6 +149,21 @@ function restrict(path: string): void {
   }
 }
 
+/** SQLITE_CORRUPT (11) or SQLITE_NOTADB (26): the file is damaged, as opposed to busy, locked or unwritable. */
+const isCorrupt = (e: unknown): boolean => {
+  const err = e as { errcode?: number; message?: string };
+  return err.errcode === 11 || err.errcode === 26 || /not a database|malformed|corrupt/i.test(err.message ?? "");
+};
+
+/** Keeps a damaged database (with its -wal/-shm) for inspection so a fresh one can be created. */
+function moveAside(path: string): string {
+  const bak = `${path}.corrupt-${Date.now()}`;
+  for (const suffix of ["", "-wal", "-shm"]) {
+    if (existsSync(path + suffix)) renameSync(path + suffix, bak + suffix);
+  }
+  return bak;
+}
+
 /** The connection for the current DATA_DIR, opened on first use. Throws if it cannot be opened (or after shutdown). */
 export function getDb(): DatabaseSync {
   if (closed) throw new Error("database is closed (shutting down)");
@@ -141,10 +174,21 @@ export function getDb(): DatabaseSync {
   let db: DatabaseSync | undefined;
   try {
     mkdirSync(dir, { recursive: true, mode: 0o700 }); // only affects directories we create
-    db = openDb(path);
+    try {
+      db = openDb(path);
+    } catch (e) {
+      // Like the old JSON file: don't take the site down over a damaged database. Subscriptions are lost, but
+      // the copy is kept next to it.
+      if (!isCorrupt(e)) throw e;
+      console.error(`yt.db is damaged (${(e as Error).message}); moved to ${moveAside(path)} and starting fresh`);
+      db = openDb(path);
+    }
     restrict(path);
+    // Visible to getDb() while the hooks run (they may call helpers that use it); undone if any hook fails.
+    current = { path, db };
     for (const fn of hooks) fn(db);
   } catch (e) {
+    current = null;
     try {
       db?.close();
     } catch {
@@ -152,7 +196,6 @@ export function getDb(): DatabaseSync {
     }
     throw new Error(`cannot open the database in ${dir}: ${(e as Error).message}`, { cause: e });
   }
-  current = { path, db };
   return db;
 }
 
@@ -170,4 +213,9 @@ export function closeDb(final = false): void {
   } catch (e) {
     console.error(`closing the database failed: ${(e as Error).message}`);
   }
+}
+
+/** Cheap liveness probe for /healthz: throws if the database cannot be opened or queried. */
+export function pingDb(): void {
+  stmt(getDb(), "SELECT 1").get();
 }
