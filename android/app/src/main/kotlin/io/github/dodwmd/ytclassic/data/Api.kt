@@ -97,8 +97,8 @@ class YtApi(
     suspend fun status(): StatusResponse = get("api/status")
 
     /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */
-    suspend fun tvNext(after: String, seen: List<String>): TvResponse =
-        get("api/tv/next", "after" to after.ifEmpty { null }, "seen" to seen.joinToString(",").ifEmpty { null })
+    suspend fun tvNext(after: String, seen: List<String>, quality: Int? = null): TvResponse =
+        get("api/tv/next", "after" to after.ifEmpty { null }, "seen" to seen.joinToString(",").ifEmpty { null }, "q" to quality?.toString())
 
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         val body = FormBody.Builder().add("id", channelId).build()

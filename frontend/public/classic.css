@@ -7,7 +7,8 @@ a { color: var(--link); text-decoration: none; } a:hover { text-decoration: unde
 #masthead { background: var(--mast); border-bottom: 1px solid var(--line); padding: 8px 16px; display: flex; gap: 24px; align-items: center; }
 #logo { font: bold 26px Arial; color: var(--logo); } #logo span { background: #c00; color: #fff; border-radius: 6px; padding: 0 5px; margin-left: 2px; }
 #tvlink { font-weight: bold; color: var(--link); text-decoration: none; padding: 4px 8px; border: 1px solid var(--line); border-radius: 4px; }
-#tvlink[aria-disabled="true"] { color: var(--muted); opacity: .6; cursor: not-allowed; }
+#tvlink[aria-disabled="true"] { color: var(--muted); font-weight: normal; border-style: dashed; cursor: not-allowed; }
+#masthead .hint { color: var(--muted); font-size: 12px; margin-left: -12px; }
 #masthead input { width: 360px; padding: 4px; } #page { max-width: 960px; margin: 16px auto; padding: 0 16px; }
 .result { display: flex; gap: 12px; margin: 0 0 16px; } .result .thumb { position: relative; flex: none; }
 .result .dur { position: absolute; right: 2px; bottom: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }

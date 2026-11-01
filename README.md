@@ -508,17 +508,28 @@ One video plays, and when it ends the next one starts: no prompts, no choices, n
 - TV needs **at least 5 subscriptions**. Below that the TV entry is greyed ("Subscribe to N more channels to turn on TV")
   and the server answers 409. If you unsubscribe below 5 while TV runs, the current video finishes and TV then stops with a message.
 - Skipped: Shorts (under 61 s), live and upcoming streams, videos without a duration, and anything that cannot be looked up.
-  Videos already watched to the end (history) are left out too, and only used again if every examined channel has nothing
-  unwatched left. The last ~50 played ids are never repeated.
+  Videos already watched to the end (history) are left out too: they are only used again if every channel has been
+  examined and none had anything unwatched left. The last ~50 played ids are never repeated.
 - **Skip** and **Stop** are the only controls (plus the normal player). After 3 failures in a row TV stops with a message.
-- Web: `/tv` (masthead "TV"). Android: "TV" on Home; keeps playing from video to video with the screen off (the
-  notification shows the current video) and fullscreen carries over. Progress is reported to the history as usual.
+- Web: `/tv` (masthead "TV"; greyed, with the reason as visible text, until 5 subscriptions). Only one request runs at a
+  time and a late answer after Stop or another Skip is dropped. A TV video is only reported to the history once it has
+  played 30 s or ended, so skipped videos leave no history rows and do not use up the 60-new-rows-per-hour cap.
+- Android: "TV" on Home, started by a tap (a restored screen never starts it by itself). The next video is requested
+  15 s before the end and handed over without a gap, so with the screen off the notification stays (and a short wake
+  lock covers a fallback request); fullscreen carries over and has Skip and Stop. TV stops when the app is hidden with
+  background playback off, when the task is removed, on a rejected token ("Open Settings"), and after 3 failures in a
+  row (a failure streak only ends once a video really played for 5 s). If you drop below 5 subscriptions the current
+  video finishes and TV then stops; the reason shows on the TV screen and on Home.
 
-`GET /api/tv/next?after=<channelId>&seen=<id,id,...>` is stateless: `after` is the channel that just played, `seen` the
-recently played ids (at most 100 ids / 1200 characters are read). It returns the `/api/video/:id` shape without `related`, plus
-`channelId`; `409 {error, code:"need-subscriptions", have, need:5}` below 5 subscriptions; `404 {code:"nothing-playable"}`
-when nothing was found within the bounded attempts (at most 6 channels and 5 videos per channel are examined per
-pass, each video check costs one cached Data API unit). `GET /api/tv/status` returns `{have, need, ok}` (the masthead uses it).
+`GET /api/tv/next?after=<channelId>&seen=<id,id,...>&q=<quality>` is stateless: `after` is the channel that just played,
+`seen` the recently played ids (at most 100 ids / 1200 characters are read). GET only, and a cross-site request is refused
+(403) before any lookup. It is rate limited (burst of 3, then 1 a second, 240 an hour for the whole server; 429 with
+`Retry-After`). It returns the `/api/video/:id` shape without `related`, plus `channelId`;
+`409 {error, code:"need-subscriptions", have, need:5}` below 5 subscriptions; `404 {code:"nothing-playable"}` when
+nothing was found within the budget. The pick walks the channels (not `after`) in random order, a few at a time, until
+one has an unseen, unwatched, playable video; one request looks at no more than 40 feeds and 40 videos (5 per channel,
+one cached Data API unit each) within 12 s, and stops early if the client disconnects.
+`GET /api/tv/status` returns `{have, need, ok}` (the masthead uses it).
 Code: `backend/src/tv.ts` (pure picker with an injectable `rand`), `frontend/public/js/tv.js`, Android `player/TvSession.kt`, `ui/Tv.kt`.
 
 ## Project layout

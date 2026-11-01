@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { MAX_SEEN, TV_MIN_SUBS, parseSeen, pickNext, playable, shuffled, type TvDeps } from "./tv.ts";
+import { MAX_FEEDS, MAX_LOOKUPS, MAX_SEEN, TIME_BUDGET_MS, TV_MIN_SUBS, TvLimiter, parseSeen, pickNext, playable, shuffled, type TvDeps } from "./tv.ts";
 import type { VideoDetail } from "./yt/api.ts";
 import type { FeedItem } from "./yt/rss.ts";
 
@@ -139,19 +139,97 @@ test("Shorts, live, upcoming and videos without a duration are skipped", async (
   assert.ok(!playable(null));
 });
 
-test("a failing metadata lookup or feed moves on to another candidate", async () => {
+test("a failing metadata lookup is attempted and skipped, never returned", async () => {
   const d = deps({ channels: 5 });
-  const flaky = vid(1, 1);
-  let calls = 0;
-  const v = await pickNext({ ...d, video: async (id) => { calls++; if (id === flaky) throw new Error("boom"); return d.video(id); }, rand: () => 0 });
-  assert.ok(v && v.id !== flaky);
-  assert.ok(calls >= 1);
-  // Everything failing ends in null, within a bounded number of lookups.
+  const asked: string[] = [];
+  const v = await pickNext({ ...d, rand: () => 0, video: async (id) => { asked.push(id); if (asked.length === 1) throw new Error("boom"); return d.video(id); } });
+  assert.ok(v, "moves on to another candidate");
+  assert.ok(asked.length >= 2, "the failing one was really attempted first");
+  assert.notEqual(v.id, asked[0]);
+  // Everything failing ends in null, within the lookup budget.
   let lookups = 0;
   assert.equal(await pickNext({ ...d, video: async () => { lookups++; throw new Error("down"); } }), null);
-  assert.ok(lookups <= 2 * 6 * 5, `unbounded lookups: ${lookups}`);
-  const allDown = deps({ channels: 5, failing: new Set([1, 2, 3, 4, 5]) });
-  assert.equal(await pickNext(allDown), null);
+  assert.ok(lookups > 0 && lookups <= MAX_LOOKUPS, `lookups ${lookups}`);
+  assert.equal(await pickNext(deps({ channels: 5, failing: new Set([1, 2, 3, 4, 5]) })), null);
+});
+
+test("the `after` channel is never even examined (not rescued by a later check)", async () => {
+  const d = deps({ channels: 5 });
+  const asked = new Set<string>();
+  for (let n = 0; n < 50; n++) {
+    await pickNext({ ...d, after: chan(2), rand: prng(n + 1), feed: async (c) => { asked.add(c); return d.feed(c); } });
+  }
+  assert.ok(!asked.has(chan(2)), "feed of the after channel was fetched");
+  assert.equal(asked.size, 4);
+});
+
+test("30 channels with 24 watched-only: unwatched videos always win, over 2000 draws", async () => {
+  const watched = new Set<string>();
+  const world: World = { channels: 30, perChannel: (c) => [detail(c, 1), detail(c, 2)], watched };
+  for (let c = 7; c <= 30; c++) for (const i of [1, 2]) watched.add(vid(c, i));
+  const d = deps(world);
+  let after = "";
+  let nulls = 0;
+  for (let n = 0; n < 2000; n++) {
+    const v = await pickNext({ ...d, after, rand: prng(n + 11) });
+    if (!v) { nulls++; continue; }
+    assert.ok(!watched.has(v.id), `draw ${n} picked watched ${v.id}`);
+    assert.notEqual(v.channelId, after);
+    after = n % 7 === 0 ? "" : v.channelId;
+  }
+  assert.ok(nulls < 20, `too many empty draws: ${nulls}`);
+});
+
+test("40 subscriptions with 37 dead feeds: the three live channels are always found", async () => {
+  const failing = new Set<number>();
+  for (let c = 4; c <= 40; c++) failing.add(c);
+  const d = deps({ channels: 40, failing });
+  for (let n = 0; n < 300; n++) {
+    const v = await pickNext({ ...d, rand: prng(n + 5) });
+    assert.ok(v, `draw ${n} found nothing`);
+    assert.ok([chan(1), chan(2), chan(3)].includes(v.channelId));
+  }
+});
+
+test("the work per request is bounded: feeds, lookups and time", async () => {
+  let feeds = 0;
+  const big = deps({ channels: 200, failing: new Set(Array.from({ length: 200 }, (_, i) => i + 1)) });
+  assert.equal(await pickNext({ ...big, feed: async () => { feeds++; throw new Error("down"); } }), null);
+  assert.ok(feeds <= MAX_FEEDS, `feeds ${feeds}`);
+  let lookups = 0;
+  const unplayable = deps({ channels: 200 });
+  assert.equal(await pickNext({ ...unplayable, video: async () => { lookups++; return null; } }), null);
+  assert.ok(lookups <= MAX_LOOKUPS, `lookups ${lookups}`);
+  // Time: a clock that jumps past the budget after the first batch stops the walk.
+  let t = 0;
+  let asked = 0;
+  assert.equal(await pickNext({ ...unplayable, now: () => t, feed: async (c) => { asked++; t += TIME_BUDGET_MS; return unplayable.feed(c); }, video: async () => null }), null);
+  assert.ok(asked <= 4, `kept going after the time budget: ${asked}`);
+});
+
+test("a client that went away stops the pick", async () => {
+  const d = deps({ channels: 20 });
+  const ac = new AbortController();
+  let feeds = 0;
+  const v = await pickNext({ ...d, signal: ac.signal, feed: async (c) => { feeds++; ac.abort(); return d.feed(c); }, video: async () => null });
+  assert.equal(v, null);
+  assert.ok(feeds <= 4, `kept fetching feeds after the abort: ${feeds}`);
+});
+
+test("TvLimiter: a small burst, then one a second, and an hourly cap", () => {
+  const l = new TvLimiter(3, 1, 10);
+  const t0 = 1_000_000;
+  assert.equal(l.take(t0), 0);
+  assert.equal(l.take(t0), 0);
+  assert.equal(l.take(t0), 0);
+  assert.ok(l.take(t0) >= 1, "fourth in the same instant is refused");
+  assert.equal(l.take(t0 + 1500), 0, "a second later one more is allowed");
+  assert.ok(l.take(t0 + 1500) >= 1);
+  const h = new TvLimiter(100, 100, 5);
+  for (let i = 0; i < 5; i++) assert.equal(h.take(t0 + i), 0);
+  const wait = h.take(t0 + 10);
+  assert.ok(wait > 3000, `hourly cap should ask for a long wait, got ${wait}`);
+  assert.equal(h.take(t0 + 3_600_001 + 4), 0, "the window slides");
 });
 
 test("randomness is injectable: same source, same pick; different source reaches different picks", async () => {

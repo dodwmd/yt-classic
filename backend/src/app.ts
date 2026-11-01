@@ -7,7 +7,7 @@ import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, 
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { channelFeed, subscriptionFeed } from "./yt/rss.ts";
-import { TV_MIN_SUBS, MAX_SEEN_PARAM, parseSeen, pickNext } from "./tv.ts";
+import { TV_MIN_SUBS, MAX_SEEN_PARAM, TvLimiter, parseSeen, pickNext } from "./tv.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
@@ -26,6 +26,12 @@ const TYPES: Record<string, string> = {
   ".css": "text/css",
   ".js": "text/javascript",
 };
+
+/** Test seam: replaced by the tests to reset the request limit. */
+export let tvLimiter = new TvLimiter();
+export function resetTvLimiter(): void {
+  tvLimiter = new TvLimiter();
+}
 
 const text = { "content-type": "text/plain; charset=utf-8" };
 
@@ -239,16 +245,24 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
 
   // TV mode: stateless. The client says which channel just played and which videos it has seen lately.
   if (path === "/api/tv/next") {
+    // A GET that makes the server look things up: refuse cross-site triggers (an <img> on another site) like the writes.
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { allow: "GET" });
     const after = param("after");
     const seenRaw = param("seen");
     if (after && !CHANNEL_ID.test(after)) return json(res, 400, { error: "bad channel id" });
     if (seenRaw.length > MAX_SEEN_PARAM) return json(res, 400, { error: "seen list too long" });
+    const wait = tvLimiter.take();
+    if (wait) return json(res, 429, { error: "too many TV requests; slow down" }, { "retry-after": String(wait) });
     const subs = await listSubs();
     if (subs.length < TV_MIN_SUBS) {
       const more = TV_MIN_SUBS - subs.length;
       return json(res, 409, { error: `Subscribe to ${more} more channel${more === 1 ? "" : "s"} to turn on TV.`, code: "need-subscriptions", have: subs.length, need: TV_MIN_SUBS });
     }
-    const v = await pickNext({ subs, after, seen: parseSeen(seenRaw), watched: watchedAmong, feed: channelFeed, video, rand: Math.random });
+    const gone = new AbortController();
+    res.once("close", () => gone.abort()); // the viewer left: stop looking things up
+    const v = await pickNext({ subs, after, seen: parseSeen(seenRaw), watched: watchedAmong, feed: channelFeed, video, rand: Math.random, signal: gone.signal });
+    if (gone.signal.aborted) return;
     if (!v) return json(res, 404, { error: "Could not find anything playable right now.", code: "nothing-playable" });
     const quality = parseQuality(url.searchParams.get("q"));
     resolveUrls(v.id, quality, "").catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp

@@ -199,6 +199,8 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination("/"), "/");
   assert.equal(destination("/history"), "/history");
   assert.equal(destination("/subscriptions"), "/subscriptions");
+  assert.equal(destination("/tv"), "/tv");
+  for (const bad of ["/tv?x=1", "/tv/", "/TV", "/tv#//evil.com"]) assert.equal(destination(bad), "/", bad);
   assert.equal(destination("/playlists"), "/playlists");
   assert.equal(destination("/playlists?id=12"), "/playlists?id=12");
   for (const bad of ["/playlists?id=", "/playlists?id=1x", "/playlists?id=1&x=//evil.com", "/playlists?id=1234567890", "/playlists/"]) assert.equal(destination(bad), "/", bad);

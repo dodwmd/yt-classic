@@ -299,6 +299,8 @@ class ApiTest {
         assertEquals("GET /api/tv/next?after=UC0000000000000000000001&seen=AAAAAAAAAAA%2CBBBBBBBBBBB", requests.last())
         api.tvNext("", emptyList())
         assertEquals("GET /api/tv/next", requests.last(), "no after and no seen on the first request")
+        api.tvNext("UC0000000000000000000001", emptyList(), 480)
+        assertEquals("GET /api/tv/next?after=UC0000000000000000000001&q=480", requests.last(), "the current quality is sent")
     }
 
     @Test

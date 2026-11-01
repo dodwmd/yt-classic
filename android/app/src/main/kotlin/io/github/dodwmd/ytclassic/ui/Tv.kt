@@ -27,7 +27,8 @@ import io.github.dodwmd.ytclassic.player.StreamPlayer
 /**
  * TV: the player, what is playing now, and Skip and Stop. Nothing to choose. Playback lives in [PlaybackHost] (so it
  * continues in the background and across videos); this screen only shows it. Fullscreen carries over between videos
- * because the player stays composed while the video changes.
+ * because the player stays composed while the video changes, and is left when TV stops. TV is only ever started by a
+ * tap (Home's TV button, or Start TV here): a screen restored after the process was killed does not start it.
  */
 @Composable
 fun TvScreen(host: PlaybackHost, fullscreen: Boolean, onFullscreen: (Boolean) -> Unit, onExit: () -> Unit) {
@@ -37,15 +38,18 @@ fun TvScreen(host: PlaybackHost, fullscreen: Boolean, onFullscreen: (Boolean) ->
             host.leaveTv()
         }
     }
-    LaunchedEffect(Unit) { if (host.tv == null && host.tvMessage == null) host.startTv() }
+    val running = host.tv != null
+    // TV ended (by itself, or Stop): nothing is left to be fullscreen about.
+    LaunchedEffect(running) { if (!running) onFullscreen(false) }
 
     val v = host.video
     val message = host.tvMessage
-    if (v != null && host.tv != null) {
+    if (v != null && running) {
         Column(Modifier.fillMaxWidth()) {
             StreamPlayer(
                 v, host.quality, emptyList(), "", 0, onPosition = {}, fullscreen = fullscreen, onFullscreen = onFullscreen,
                 onSkip = if (fullscreen) ({ host.skipTv() }) else null, // the buttons below do it otherwise
+                onStop = if (fullscreen) ({ host.stopTv(); onExit() }) else null,
             )
             if (!fullscreen) {
                 Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
@@ -61,11 +65,21 @@ fun TvScreen(host: PlaybackHost, fullscreen: Boolean, onFullscreen: (Boolean) ->
         }
     } else {
         Column(Modifier.fillMaxSize().padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-            if (message != null) {
-                Text(message, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
-                Button(onClick = onExit, modifier = Modifier.padding(top = 12.dp)) { Text("Back to home") }
-            } else {
-                CircularProgressIndicator()
+            when {
+                running -> CircularProgressIndicator() // waiting for the first video
+                message != null -> {
+                    Text(message, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite })
+                    if (host.tvNeedsToken) {
+                        val openSettings = LocalOpenSettings.current
+                        Button(onClick = openSettings, modifier = Modifier.padding(top = 12.dp)) { Text("Open Settings") }
+                    }
+                    Button(onClick = onExit, modifier = Modifier.padding(top = 12.dp)) { Text("Back to home") }
+                }
+                else -> {
+                    Text("TV is not running.")
+                    Button(onClick = { host.startTv() }, modifier = Modifier.padding(top = 12.dp)) { Text("Start TV") }
+                    OutlinedButton(onClick = onExit, modifier = Modifier.padding(top = 8.dp)) { Text("Back to home") }
+                }
             }
         }
     }
