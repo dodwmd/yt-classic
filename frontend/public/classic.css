@@ -28,3 +28,31 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .controls { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #222; color: #ddd; } .controls[hidden] { display: none; }
 .controls .bar { flex: 1; } .controls .vol { width: 70px; } .controls .time { font-size: 12px; min-width: 90px; }
 .controls button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 14px; }
+
+/* --- Small screens and touch. Desktop rules above are untouched; everything below only applies on phones/tablets. --- */
+#masthead { flex-wrap: wrap; } #masthead form { display: flex; gap: 6px; min-width: 0; max-width: 100%; }
+#masthead input { max-width: 100%; min-width: 0; box-sizing: border-box; }
+img { max-width: 100%; } .result .meta, .rel > div, .card { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 800px) {
+  body { font-size: 15px; }
+  #masthead { gap: 8px 16px; padding: 8px 12px; } #masthead form { flex: 1 1 240px; } #masthead input { flex: 1; width: auto; font-size: 16px; min-height: 40px; }
+  #page { padding: 0 12px; margin: 12px auto; }
+  #watch, #home { flex-direction: column; gap: 16px; }
+  #main, #player { width: 100%; max-width: 100%; flex: none; } #main { min-width: 0; } #related, #feed { min-width: 0; width: 100%; flex: none; }
+  #home { flex-direction: column-reverse; } #subs { width: auto; }
+  #subs ul { display: flex; flex-wrap: wrap; gap: 4px 16px; } #subs h3 { margin: 0 0 4px; }
+  #main h1 { font-size: 18px; } .info { flex-wrap: wrap; gap: 4px 16px; }
+  .result .title { font-size: 17px; } .grid { gap: 16px 12px; }
+  .card { width: calc(50% - 6px); } .card .thumb img, .rel .thumb img, .result .thumb img { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
+  .result .thumb { width: 160px; } .rel .thumb { width: 140px; flex: none; }
+  .chead { flex-wrap: wrap; } .banner { max-height: 120px; }
+  .pager { gap: 8px; } .pager a, .quality a, #masthead #logo { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; box-sizing: border-box; }
+  summary { padding: 12px 0; } #subs li a { display: inline-flex; align-items: center; min-height: 44px; }
+  button, #masthead button { min-height: 44px; min-width: 44px; padding: 0 14px; font-size: 15px; }
+  .controls { flex-wrap: wrap; gap: 4px 8px; padding: 4px 8px; }
+  .controls button { min-width: 44px; min-height: 44px; font-size: 20px; padding: 0; }
+  .controls .bar { flex: 1 1 100%; order: 5; min-height: 44px; margin: 0; } .controls .time { font-size: 14px; min-width: 0; flex: 1; }
+  .controls .vol { width: 90px; min-height: 44px; margin: 0; flex: none; }
+  .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .fs { order: 4; }
+}
+@media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .controls .vol { display: none; } }
