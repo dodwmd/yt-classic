@@ -1,0 +1,22 @@
+{
+  "playlists": [
+    {
+      "id": 1,
+      "name": "Watch later",
+      "count": 5,
+      "builtin": true
+    },
+    {
+      "id": 2,
+      "name": "Music",
+      "count": 0,
+      "builtin": false
+    },
+    {
+      "id": 3,
+      "name": "Talks",
+      "count": 0,
+      "builtin": false
+    }
+  ]
+}

@@ -43,6 +43,7 @@ fun WatchScreen(
         // Where this screen left off (also the explicit start), else where the server last saw it (any device).
         val begin = remember(v.id) { resumeStart(resume[0], r.progress, v.durationSeconds ?: 0L) }
         var expanded by remember(v.id) { mutableStateOf(false) }
+        val later = rememberLater(api, (listOf(v.id) + r.related.items.map { it.id }).distinct())
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
             StreamPlayer(v, r.quality, r.qualities, r.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
@@ -50,6 +51,7 @@ fun WatchScreen(
                 item {
                     Column(Modifier.padding(12.dp)) {
                         Text(v.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                        WatchLaterButton(later, v.id, v.title)
                         Text(
                             joinParts(v.channelTitle, timeAgo(v.publishedAt), formatViews(v.views)),
                             color = LinkBlue,
@@ -64,7 +66,7 @@ fun WatchScreen(
                     }
                 }
                 if (r.related.items.isNotEmpty()) item { SectionTitle(r.related.heading.ifBlank { "Related videos" }) }
-                items(r.related.items, key = { it.id }) { RelatedRow(it, onVideo, thumbWidth = 140) }
+                items(r.related.items, key = { it.id }) { RelatedRow(it, onVideo, thumbWidth = 140, later = later) }
             }
         }
     }

@@ -1,4 +1,4 @@
-import { $, api, channelHref, clone, fillRow, markWatched, run, setTitle, thumbUrl, watchHref } from "./lib.js";
+import { $, api, channelHref, clone, fillRow, laterButton, markWatched, run, setTitle, thumbUrl, watchHref } from "./lib.js";
 import { formatViews, join, timeAgo, viewsText } from "./fmt.js";
 import { initPlayer } from "./player.js";
 
@@ -55,6 +55,11 @@ run(async () => {
     $("#rel-list").append(row);
   }
   markWatched();
+  const { watchLater } = await api(`/api/playlists/membership?ids=${v.id}`).catch(() => ({ watchLater: [] }));
+  const [btn, msg] = laterButton(v.id, watchLater.includes(v.id), v.title, ["Watch later", "\u2713 In Watch later"]);
+  btn.className = msg.className = "";
+  btn.id = "later";
+  $("#later-box").append(btn, msg);
 });
 
 // Reports progress every 10 s while playing and on pause/end/leave, once something has really played.

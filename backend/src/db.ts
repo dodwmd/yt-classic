@@ -60,6 +60,37 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX history_last ON history (last_watched);
     `,
   },
+  {
+    // User-curated playlists. Id 1 is the built-in "Watch later" (cannot be renamed or deleted). Items keep a copy of
+    // the video's title/channel/thumb/duration so a list renders without any API call.
+    version: 4,
+    sql: `
+      CREATE TABLE playlists (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        name_key TEXT NOT NULL UNIQUE,
+        created INTEGER NOT NULL,
+        updated INTEGER NOT NULL,
+        position INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO playlists (id, name, name_key, created, updated, position) VALUES (1, 'Watch later', 'watch later', 0, 0, 0);
+      CREATE TABLE playlist_items (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        playlist_id INTEGER NOT NULL REFERENCES playlists (id) ON DELETE CASCADE,
+        video_id TEXT NOT NULL,
+        added INTEGER NOT NULL,
+        position INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        channel_title TEXT NOT NULL,
+        thumb TEXT NOT NULL,
+        duration INTEGER NOT NULL,
+        UNIQUE (playlist_id, video_id)
+      );
+      CREATE INDEX playlist_items_order ON playlist_items (playlist_id, position, seq);
+      CREATE INDEX playlist_items_video ON playlist_items (video_id);
+    `,
+  },
 ];
 
 /**

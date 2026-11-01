@@ -48,22 +48,23 @@ import kotlinx.coroutines.launch
 fun thumbUrl(id: String) = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 
 @Composable
-fun FeedRow(v: FeedItem, onVideo: (String) -> Unit, watched: Boolean = false) = VideoRow(
-    thumb = thumbUrl(v.id), title = v.title, duration = null, watched = watched,
+fun FeedRow(v: FeedItem, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
+    thumb = thumbUrl(v.id), title = v.title, duration = null, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.errors?.get(v.id),
     details = listOf(v.channelTitle, joinParts(formatViews(v.views), timeAgo(v.publishedAt))),
     onClick = { onVideo(v.id) },
 )
 
 @Composable
-fun RelatedRow(r: RelatedItem, onVideo: (String) -> Unit, thumbWidth: Int = 160, watched: Boolean = false) = VideoRow(
+fun RelatedRow(r: RelatedItem, onVideo: (String) -> Unit, thumbWidth: Int = 160, watched: Boolean = false, later: LaterState? = null) = VideoRow(
     thumb = r.thumb, title = r.title, duration = r.duration, thumbWidth = thumbWidth, watched = watched,
+    trailing = later?.let { { LaterButton(it, r.id, r.title) } }, note = later?.errors?.get(r.id),
     details = listOf(r.channelTitle, joinParts(r.views?.let(::viewsText), r.age ?: timeAgo(r.publishedAt))),
     onClick = { onVideo(r.id) },
 )
 
 @Composable
-fun SummaryRow(v: VideoSummary, onVideo: (String) -> Unit, watched: Boolean = false) = VideoRow(
-    thumb = v.thumb, title = v.title, watched = watched, duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds),
+fun SummaryRow(v: VideoSummary, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
+    thumb = v.thumb, title = v.title, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.errors?.get(v.id), duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds),
     details = listOf(v.channelTitle, joinParts(timeAgo(v.publishedAt), formatViews(v.views))),
     onClick = { onVideo(v.id) },
 )
@@ -93,7 +94,8 @@ fun rememberWatched(api: YtApi, ids: List<String>): Set<String> {
 
 /** Row for a history entry: shows how far you got, as a bar and in words (for TalkBack). */
 @Composable
-fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit) = VideoRow(
+fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit, later: LaterState? = null) = VideoRow(
+    trailing = later?.let { { LaterButton(it, h.id, h.title) } }, note = later?.errors?.get(h.id),
     thumb = h.thumb.ifEmpty { thumbUrl(h.id) }, title = h.title, duration = h.durationSeconds.takeIf { it > 0 }?.let(::formatSeconds),
     details = listOf(
         h.channelTitle,
@@ -103,19 +105,21 @@ fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit) = VideoRow(
 )
 
 @Composable
-fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit) {
+fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit) {
     val loaded = rememberLoad { api.home() }
     LoadedContent(loaded) { home ->
         val watched = rememberWatched(api, home.feed.map { it.id })
+        val later = rememberLater(api, (home.resume.map { it.id } + home.feed.map { it.id }).distinct())
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onPlaylists, modifier = Modifier.semantics { contentDescription = "Playlists and Watch later" }) { Text("Playlists") }
                     TextButton(onClick = onHistory, modifier = Modifier.semantics { contentDescription = "Watch history" }) { Text("History") }
                 }
             }
             if (home.resume.isNotEmpty()) {
                 item { SectionTitle("Continue watching") }
-                items(home.resume, key = { "c" + it.id }) { HistoryRow(it, onVideo) }
+                items(home.resume, key = { "c" + it.id }) { HistoryRow(it, onVideo, later) }
             }
             if (home.subs.isEmpty()) {
                 item {
@@ -132,7 +136,7 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
                     }
                 }
                 item { SectionTitle("New from your subscriptions") }
-                items(home.feed.distinctBy { it.id }, key = { it.id }) { FeedRow(it, onVideo, it.id in watched) }
+                items(home.feed.distinctBy { it.id }, key = { it.id }) { FeedRow(it, onVideo, it.id in watched, later) }
             }
         }
     }
@@ -149,6 +153,7 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
         var busy by remember(page) { mutableStateOf(false) } // one request at a time: no double taps
         val scope = rememberCoroutineScope()
         val context = LocalContext.current
+        val later = rememberLater(api, items.map { it.id })
         fun attempt(block: suspend () -> Unit) {
             if (busy) return
             busy = true
@@ -177,7 +182,7 @@ fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {
             }
             items(items, key = { it.id }) { h ->
                 Column {
-                    HistoryRow(h, onVideo)
+                    HistoryRow(h, onVideo, later)
                     TextButton(
                         enabled = !busy,
                         onClick = { attempt { api.removeFromHistory(h.id); items = items.filter { it.id != h.id } } },
@@ -222,10 +227,11 @@ fun SearchScreen(api: YtApi, query: String, onVideo: (String) -> Unit) {
         var failure by remember(page) { mutableStateOf<String?>(null) }
         val scope = rememberCoroutineScope()
         val watched = rememberWatched(api, items.map { it.id })
+        val later = rememberLater(api, items.map { it.id })
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
             item { SectionTitle("Results for \"$query\"") }
             if (items.isEmpty()) item { Text("No results.", modifier = Modifier.padding(12.dp)) }
-            items(items, key = { it.id }) { SummaryRow(it, onVideo, it.id in watched) }
+            items(items, key = { it.id }) { SummaryRow(it, onVideo, it.id in watched, later) }
             item {
                 Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     failure?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -261,6 +267,7 @@ fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit) {
         var showAbout by remember(c) { mutableStateOf(false) }
         val scope = rememberCoroutineScope()
         val watched = rememberWatched(api, items.map { it.id })
+        val later = rememberLater(api, items.map { it.id })
         LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
             item {
                 Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -292,7 +299,7 @@ fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit) {
                 }
             }
             item { SectionTitle("Uploads") }
-            items(items, key = { it.id }) { SummaryRow(it, onVideo, it.id in watched) }
+            items(items, key = { it.id }) { SummaryRow(it, onVideo, it.id in watched, later) }
             if (token != null) {
                 item {
                     OutlinedButton(modifier = Modifier.padding(12.dp), onClick = {

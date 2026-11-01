@@ -22,8 +22,16 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .chead { display: flex; align-items: center; gap: 12px; } .chead h1 { font-size: 22px; margin: 0; }
 #feed { flex: 1; } #feed h3 { margin: 16px 0 8px; } #feed h3:first-child { margin-top: 0; }
 .card .thumb, .rel .thumb { position: relative; display: block; } .card .dur, .rel .dur { position: absolute; right: 2px; bottom: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
-.badge { position: absolute; left: 2px; top: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
+.badge { position: absolute; left: 2px; bottom: 6px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
 .prog { position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: #555; } .prog i { display: block; height: 100%; background: #c00; }
+.card, .rel, .result { position: relative; }
+.later { position: absolute; left: 2px; top: 2px; min-width: 32px; min-height: 32px; padding: 0; border: 0; border-radius: 3px; font: bold 18px/1 Arial, sans-serif; color: #fff; background: rgba(0, 0, 0, .75); cursor: pointer; }
+.later:hover { background: #000; } .later[aria-pressed="true"] { background: #c00; } .later:focus-visible { outline: 2px solid #fff; outline-offset: 1px; box-shadow: 0 0 0 4px #000; }
+.later-msg { position: absolute; left: 2px; top: 36px; max-width: calc(100% - 4px); background: #c00; color: #fff; font-size: 11px; padding: 0 3px; }
+.later-msg:empty { display: none; } #later { margin: 0 8px 8px 0; } #later-box span { color: #c00; } @media (prefers-color-scheme: dark) { #later-box span { color: #ff8a80; } } #later[aria-pressed="true"] { background: #c00; color: #fff; }
+.pl { list-style: none; padding: 0; margin: 0 0 16px; } .pl li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.pl .name { flex: 1; font-size: 15px; } .pl .count, #pl-bar { color: var(--muted); } #pl-bar { display: flex; align-items: center; gap: 16px; margin: 8px 0 16px; }
+#pl-new { margin: 0 0 16px; } #pl-new input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); }
 #hist-bar { display: flex; align-items: center; gap: 16px; margin: 8px 0 16px; } .rm { margin-top: 4px; }
 .rel .title { display: block; } .rel .sub { color: var(--muted); }
 #player { width: 640px; background: #000; } #player video { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: contain; display: block; }
@@ -61,7 +69,7 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   #subs ul { display: flex; flex-wrap: wrap; gap: 4px 16px; } #subs h3 { margin: 0 0 4px; }
   #main h1 { font-size: 18px; } .info { flex-wrap: wrap; gap: 4px 16px; }
   .result .title { font-size: 17px; } .grid { gap: 16px 12px; }
-  .card { width: calc(50% - 6px); } .card .thumb img, .rel .thumb img, .result .thumb img { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
+  .later { min-width: 44px; min-height: 44px; } .later-msg { top: 48px; } .pl li { min-height: 44px; } .card { width: calc(50% - 6px); } .card .thumb img, .rel .thumb img, .result .thumb img { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
   .result .thumb { width: 160px; } .rel .thumb { width: 140px; flex: none; }
   #hist-bar { flex-wrap: wrap; gap: 8px 16px; } .chead { flex-wrap: wrap; } .banner { max-height: 120px; }
   .pager { gap: 8px; } .pager a, .quality a, #masthead #logo { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; box-sizing: border-box; }

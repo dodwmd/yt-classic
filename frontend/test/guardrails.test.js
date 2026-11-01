@@ -73,7 +73,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "subscriptions.js": "subscriptions.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");
@@ -164,6 +164,9 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination("/"), "/");
   assert.equal(destination("/history"), "/history");
   assert.equal(destination("/subscriptions"), "/subscriptions");
+  assert.equal(destination("/playlists"), "/playlists");
+  assert.equal(destination("/playlists?id=12"), "/playlists?id=12");
+  for (const bad of ["/playlists?id=", "/playlists?id=1x", "/playlists?id=1&x=//evil.com", "/playlists?id=1234567890", "/playlists/"]) assert.equal(destination(bad), "/", bad);
   assert.equal(destination("/constructor"), "/");
   assert.equal(destination("__proto__"), "/");
   assert.equal(destination(`/watch?v=${ID}`), `/watch?v=${ID}`);
