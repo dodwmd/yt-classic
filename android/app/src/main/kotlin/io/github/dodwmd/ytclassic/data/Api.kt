@@ -11,7 +11,9 @@ import okhttp3.FormBody
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
 import java.io.IOException
 import java.util.concurrent.TimeUnit
@@ -100,6 +102,27 @@ class YtApi(
 
     private fun check(r: Response) {
         if (!r.isSuccessful) throw ApiException("Request failed (${r.code})")
+    }
+
+    /**
+     * Imports a Takeout CSV, an OPML file or a list of channel links (the backend detects which, and UTF-8 or UTF-16).
+     * The file's own bytes are sent: re-encoding decoded text could change the size or the characters.
+     */
+    suspend fun importSubscriptions(bytes: ByteArray): ImportResult {
+        val body = bytes.toRequestBody("text/plain".toMediaType())
+        return decode(execute(Request.Builder().url(url("api/subscriptions/import")).post(body).build()))
+    }
+
+    /** The whole export file as text; [format] is "csv" or "opml". */
+    suspend fun exportSubscriptions(format: String): String = withContext(Dispatchers.IO) {
+        execute(Request.Builder().url(url("api/subscriptions/export", "format" to format)).build()).use {
+            val text = it.body.string()
+            if (!it.isSuccessful) {
+                val message = runCatching { ApiJson.decodeFromString<ApiError>(text).error }.getOrDefault("")
+                throw ApiException(message.ifBlank { "Request failed (${it.code})" })
+            }
+            text
+        }
     }
 
     /** Checks that the configured server answers; used by the settings screen. */

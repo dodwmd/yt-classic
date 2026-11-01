@@ -18,6 +18,8 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
 
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts.
+- **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
+  Settings in the Android app); see [Importing and exporting subscriptions](#importing-and-exporting-subscriptions).
 - **Search**: classic results list, paged, using yt-dlp (no API quota).
 - **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar.
 - **Watch history and resume**: the watch page reports your position every ~10 s (and on pause, end and leaving), so a
@@ -41,8 +43,8 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
-  `DELETE /api/history/:id`, `POST /api/history/clear`) plus the video stream (`/stream/:id`). It contains no HTML.
-- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, the CSS,
+  `DELETE /api/history/:id`, `POST /api/history/clear`, `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
+- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
 - **Playback:** YouTube no longer offers a single file with audio and video together, so the backend takes the
@@ -52,6 +54,36 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
   the stream at `?t=<seconds>` when you seek outside what has buffered.
 - **Storage:** subscriptions and a persistent metadata cache live in one SQLite database, `DATA_DIR/yt.db` (default
   `backend/data/`), using Node's built-in `node:sqlite` (no extra dependency).
+
+## Importing and exporting subscriptions
+
+Open `/subscriptions` (linked from the home page) and choose a file or paste links. In the Android app it is under
+Settings > Subscriptions (system file picker, no storage permission). Over the API:
+
+```bash
+curl -X POST --data-binary @subscriptions.csv http://localhost:8080/api/subscriptions/import
+# {"added":12,"existing":3,"skipped":{"invalid":0,"handles":2,"full":0},"total":15}
+curl -OJ 'http://localhost:8080/api/subscriptions/export?format=opml'     # or format=csv (the default)
+```
+
+`POST /api/subscriptions/import` takes the raw file as the request body (up to 1 MB, otherwise 413; same-origin rule
+as the other POST routes) and detects the format itself. The whole import is one SQLite transaction.
+
+- **Google Takeout `subscriptions.csv`** (Takeout > YouTube > subscriptions): header `Channel ID,Channel URL,Channel title`.
+  Columns are found by header name in any order; a BOM, CRLF line ends and quoted fields (commas, `""`, line breaks) are fine.
+- **OPML** as in YouTube's subscription manager export: every `<outline xmlUrl="https://www.youtube.com/feeds/videos.xml?channel_id=UC...">`
+  with its `title` (or `text`). Only the five basic XML entities and numeric references are decoded; DTD entities are never expanded.
+- **A plain list**, one per line: `https://www.youtube.com/channel/UC...` URLs, feed URLs or bare `UC...` ids. Blank lines and
+  lines starting with `#` are ignored. There are no titles in a list, so the channel id is shown until you open the channel.
+
+Response: `added` (new), `existing` (already subscribed, or repeated in the file; left unchanged), `skipped.invalid` (not
+a channel id), `skipped.handles` (`@handle`, `/c/` and `/user/` links: resolving those needs the Data API, so they are
+skipped, not guessed), `skipped.full` (not added because the 500-subscription limit was reached) and `total` (your
+subscriptions after the import). A body with nothing recognisable gets 400.
+
+`GET /api/subscriptions/export?format=csv|opml` downloads your subscriptions (`Content-Disposition: attachment`,
+`subscriptions.csv` / `subscriptions.opml`) in the Takeout CSV shape or as OPML; both import back unchanged here.
+nginx allows the 1 MB body only on the import route; every other route keeps the 8 KB limit.
 
 ## Requirements
 
@@ -218,7 +250,7 @@ is in the history; `/api/home` adds `continue` (up to 12 unfinished videos, most
 ## Android app
 
 `android/` is a native Kotlin + Jetpack Compose app that uses the same backend API as the web frontend: home feed,
-search, watch (with the seek bar), channel pages, subscribe/unsubscribe, a "Continue watching" row, watched badges and a
+search, watch (with the seek bar), channel pages, subscribe/unsubscribe, subscription import/export (Settings), a "Continue watching" row, watched badges and a
 History screen (Home, "Watch history"). Playback uses Media3/ExoPlayer.
 
 **Build and install** (the Android SDK is large, so it has its own Nix shell, separate from the root one):
@@ -355,7 +387,8 @@ backend/
   src/yt/rss.ts          channel RSS feeds
   src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
   src/history.ts         watch history and resume positions (SQLite)
-  src/store.ts           subscriptions (SQLite, imports the old subscriptions.json)
+  src/store.ts           subscriptions (SQLite, imports the old subscriptions.json; atomic bulk addSubs)
+  src/subsio.ts          subscription import (Takeout CSV, OPML, URL list) and export parsers/writers
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look; follows the system light/dark setting

@@ -32,6 +32,9 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 .controls .bar { flex: 1; } .controls .vol { width: 70px; } .controls .time { font-size: 12px; min-width: 90px; }
 .controls button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 14px; }
 
+#import textarea { width: 100%; max-width: 560px; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); }
+.hint { color: var(--muted); max-width: 560px; } #result { font-weight: bold; }
+
 /* Keyboard focus must stay visible on the always-dark control bar, in light and dark themes. */
 .controls button:focus-visible, .controls input:focus-visible, .controls a:focus-visible { outline: 2px solid #fff; outline-offset: 2px; box-shadow: 0 0 0 4px #000; }
 a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }

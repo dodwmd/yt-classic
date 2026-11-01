@@ -6,7 +6,7 @@ import { promisify } from "node:util";
 import { existsSync, statSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { MAX_SUBS, MAX_TITLE, addSub, listSubs, removeSub } from "./store.ts";
+import { MAX_SUBS, MAX_TITLE, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { closeDb, getDb, onOpen } from "./db.ts";
 
 // Well-formed channel ids ("UC" + 22 chars).
@@ -185,4 +185,35 @@ test("the database and a newly created data dir are owner-only", async () => {
   assert.equal(statSync(process.env.DATA_DIR).mode & 0o777, 0o700);
   assert.equal(statSync(join(process.env.DATA_DIR, "yt.db")).mode & 0o777, 0o600);
   assert.equal(statSync(join(process.env.DATA_DIR, "yt.db-wal")).mode & 0o777, 0o600);
+});
+
+test("addSubs adds, counts existing, keeps order and reports the total", async () => {
+  await addSub({ id: uc(1), title: "One" });
+  const r = await addSubs([{ id: uc(1), title: "Again" }, { id: uc(2), title: "Two" }, { id: uc(2), title: "Dup" }, { id: uc(3), title: "T".repeat(500) }]);
+  assert.deepEqual(r, { added: 2, existing: 2, full: 0, total: 3 });
+  const subs = await listSubs();
+  assert.deepEqual(subs.map((s) => s.id), [uc(1), uc(2), uc(3)]);
+  assert.equal(subs[0].title, "One"); // an existing subscription is left alone
+  assert.equal(subs[2].title.length, MAX_TITLE);
+});
+
+test("addSubs stops at MAX_SUBS and counts what did not fit", async () => {
+  await addSubs(Array.from({ length: MAX_SUBS - 2 }, (_, i) => ({ id: uc(i), title: "t" })));
+  const r = await addSubs([0, 1, 2, 3, 4].map((i) => ({ id: uc(i), title: "t" })).concat([{ id: uc("x1"), title: "n" }, { id: uc("x2"), title: "n" }, { id: uc("x3"), title: "n" }]));
+  assert.deepEqual(r, { added: 2, existing: 5, full: 1, total: MAX_SUBS });
+  assert.equal((await listSubs()).length, MAX_SUBS);
+});
+
+test("addSubs is atomic: one invalid entry rolls everything back, and the db stays usable", async () => {
+  await addSub({ id: uc(1), title: "One" });
+  await assert.rejects(addSubs([{ id: uc(2), title: "Two" }, { id: "bad", title: "x" }, { id: uc(3), title: "Three" }]), RangeError);
+  assert.deepEqual((await listSubs()).map((s) => s.id), [uc(1)]);
+  assert.equal(await addSub({ id: uc(2), title: "Two" }), "added"); // no dangling transaction
+});
+
+test("titles are cut by code point, never through a surrogate pair", async () => {
+  await addSub({ id: uc(1), title: "\u{1F600}".repeat(MAX_TITLE + 5) });
+  const t = (await listSubs())[0].title;
+  assert.equal(Array.from(t).length, MAX_TITLE);
+  assert.equal(t, "\u{1F600}".repeat(MAX_TITLE));
 });

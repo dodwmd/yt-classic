@@ -5,17 +5,18 @@ import { fileURLToPath } from "node:url";
 import { channel, channelVideos, video } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { pingDb } from "./db.ts";
-import { CHANNEL_ID, addSub, listSubs, removeSub } from "./store.ts";
+import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { subscriptionFeed } from "./yt/rss.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
+import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, parseImport } from "./subsio.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
 const publicDir = fileURLToPath(new URL("../../frontend/public/", import.meta.url));
-const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html" };
+const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html", "/subscriptions": "subscriptions.html" };
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css",
@@ -90,6 +91,17 @@ async function readProgress(req: IncomingMessage): Promise<{ id: string; positio
     position: typeof position === "number" || (typeof position === "string" && position.trim() !== "") ? Number(position) : NaN,
     finished: fin === true || fin === "1" || fin === "true",
   };
+}
+
+/** The raw request body, or null when it is larger than [max] (the rest is read and dropped so the client gets the 413). */
+async function readBody(req: IncomingMessage, max: number): Promise<Buffer | null> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of req) {
+    size += (chunk as Buffer).length;
+    if (size <= max) chunks.push(chunk as Buffer);
+  }
+  return size > max ? null : Buffer.concat(chunks);
 }
 
 async function serveFrontend(path: string, res: ServerResponse): Promise<boolean> {
@@ -219,6 +231,35 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     }
     await removeSub(id);
     return json(res, 200, { subscribed: false });
+  }
+
+  if (req.method === "POST" && path === "/api/subscriptions/import") {
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const raw = await readBody(req, MAX_IMPORT_BYTES);
+    if (raw === null) return json(res, 413, { error: "File too large (limit 1 MB)." });
+    const body = decodeBody(raw);
+    if (body === null) return json(res, 400, { error: "That file is not valid UTF-8 or UTF-16 text." });
+    const parsed = parseImport(body);
+    if (!parsed.subs.length && !parsed.invalid && !parsed.handles) {
+      return json(res, 400, { error: "No subscriptions found. Use a Google Takeout subscriptions.csv, an OPML file, or a list of channel URLs." });
+    }
+    const { added, existing, full, total } = await addSubs(parsed.subs);
+    return json(res, 200, { added, existing, skipped: { invalid: parsed.invalid, handles: parsed.handles, full }, total });
+  }
+
+  if (req.method === "GET" && path === "/api/subscriptions/export") {
+    const format = url.searchParams.get("format") ?? "csv";
+    if (format !== "csv" && format !== "opml") return json(res, 400, { error: "format must be csv or opml" });
+    const subs = await listSubs();
+    const body = format === "csv" ? exportCsv(subs) : exportOpml(subs);
+    const type = format === "csv" ? "text/csv" : "text/x-opml";
+    return void res
+      .writeHead(200, {
+        "content-type": `${type}; charset=utf-8`,
+        "content-disposition": `attachment; filename="subscriptions.${format}"`,
+        "cache-control": "no-store",
+      })
+      .end(body);
   }
 
   if (path.startsWith("/stream/")) {

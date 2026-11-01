@@ -51,7 +51,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "subscriptions.js": "subscriptions.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");
@@ -90,4 +90,29 @@ test("viewport meta allows zooming on every page", () => {
     assert.ok(m, `${f} has no viewport meta`);
     assert.doesNotMatch(m[1], /user-scalable|maximum-scale/i, `${f} blocks zoom`);
   }
+});
+
+// nginx's default body limit is 8k for every route; only the subscription import may take a whole file.
+test("nginx: only the exact import location raises client_max_body_size, and the server default stays 8k", () => {
+  const conf = readFileSync(new URL("../nginx.conf", import.meta.url), "utf8").replace(/#.*$/gm, "");
+  const re = /client_max_body_size\s+(\S+);/g;
+  const found = [];
+  for (const m of conf.matchAll(re)) {
+    // the innermost enclosing `location ... {` (or the server block) of this directive
+    const before = conf.slice(0, m.index);
+    const open = [...before.matchAll(/([^{};]*)\{|\}/g)];
+    const stack = [];
+    for (const t of open) {
+      if (t[0] === "}") stack.pop();
+      else stack.push(t[1].trim());
+    }
+    found.push([stack.at(-1), m[1]]);
+  }
+  assert.deepEqual(found.sort(), [["location = /api/subscriptions/import", "1m"], ["server", "8k"]]);
+  assert.match(conf, /location = \/api\/subscriptions\/import \{[^}]*limit_conn[^}]*limit_req/s, "the import location must be rate limited");
+});
+
+test("compose.yaml bounds the frontend's /tmp tmpfs", () => {
+  const compose = readFileSync(new URL("../../compose.yaml", import.meta.url), "utf8");
+  assert.match(compose.slice(compose.indexOf("  frontend:")), /tmpfs: \["\/tmp:size=\d+m"\]/);
 });

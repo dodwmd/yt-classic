@@ -4,6 +4,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
@@ -57,7 +60,7 @@ fun SettingsScreen(app: App, onDone: () -> Unit) {
     val host = normalizeServerUrl(address)
     val cleartextWarning = host != null && host.scheme == "http" && !isPrivateHost(host.host)
 
-    Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+    Column(Modifier.fillMaxWidth().imePadding().verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Server", style = MaterialTheme.typography.titleLarge)
         Text(
             "The address of your YouTube Classic backend, for example 192.168.1.153:8080 on home Wi-Fi, " +
@@ -111,5 +114,6 @@ fun SettingsScreen(app: App, onDone: () -> Unit) {
             }
             Switch(checked = background, onCheckedChange = null)
         }
+        SubscriptionsSection(app.api)
     }
 }
