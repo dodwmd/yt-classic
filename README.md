@@ -135,6 +135,11 @@ npm test            # node:test with fake yt-dlp/ffmpeg binaries and a stubbed A
 
 Node runs the TypeScript directly (`--experimental-strip-types`), so there is no build step.
 
+Two TypeScript versions are installed on purpose: type checking (`npm run typecheck`) runs on **TypeScript 7**
+(the `typescript-7` alias in `backend/package.json`), while the plain `typescript` 5.x package exists only as
+ESLint's parser, because typescript-eslint does not support TypeScript 7 yet. When it does, drop the alias and the
+Dependabot ignore rule in `.github/dependabot.yml`.
+
 `shell.nix` also picks up an optional, git-ignored `shell.local.nix` for personal tools. It is a function from `{ pkgs }` to a list of packages, for example `{ pkgs }: [ pkgs.ripgrep ]`.
 
 To update yt-dlp in the dev shell, bump `ytDlpVersion` and its `sha256` in `shell.nix` (the command is in the comment there).

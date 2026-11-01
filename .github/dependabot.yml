@@ -4,6 +4,12 @@ updates:
     directory: /backend
     schedule:
       interval: weekly
+    ignore:
+      # `typescript` here is only ESLint's parser. typescript-eslint refuses to run on TypeScript 7 (it
+      # throws at startup), so this pin stays on 5.x. Type checking uses the `typescript-7` alias, which
+      # Dependabot still updates. Remove this rule once typescript-eslint supports TypeScript 7.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
