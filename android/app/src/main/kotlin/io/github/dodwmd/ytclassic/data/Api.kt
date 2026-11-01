@@ -91,6 +91,8 @@ class YtApi(
     suspend fun channel(id: String, pageToken: String? = null): ChannelResponse =
         get("api/channel/$id", "pageToken" to pageToken)
 
+    suspend fun status(): StatusResponse = get("api/status")
+
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         val body = FormBody.Builder().add("id", channelId).build()
         val req = request(url(if (subscribe) "api/subscribe" else "api/unsubscribe")).post(body).build()

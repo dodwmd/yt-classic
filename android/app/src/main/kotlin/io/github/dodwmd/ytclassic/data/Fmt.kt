@@ -40,3 +40,19 @@ fun formatViews(n: String?): String {
 fun viewsText(v: String): String = if (Regex("view|watching", RegexOption.IGNORE_CASE).containsMatchIn(v)) v else "$v views"
 
 fun joinParts(vararg parts: String?): String = parts.filter { !it.isNullOrEmpty() }.joinToString(" · ")
+
+/** The rows of the Status screen, mirroring frontend/public/js/status.js. */
+fun statusRows(s: StatusResponse, nowMillis: Long = System.currentTimeMillis()): List<Pair<String, String>> {
+    val r = s.resolves
+    val uptime = "${s.uptimeSeconds / 3600}h ${s.uptimeSeconds % 3600 / 60}m"
+    return listOf(
+        "yt-dlp" to if (s.ytdlp.present) s.ytdlp.version.orEmpty() else "not found",
+        "Last successful resolve" to (r.lastSuccess?.let { timeAgo(it.at, nowMillis) } ?: "never"),
+        "Last failure" to (r.lastFailure?.let { joinParts(timeAgo(it.at, nowMillis), it.reason) } ?: "never"),
+        "Resolves since start" to "${r.ok} ok, ${r.failed} failed",
+        "ffmpeg" to if (s.ffmpeg.present) s.ffmpeg.version.orEmpty() else "not found",
+        "Node" to s.node,
+        "Uptime" to uptime,
+        "Database and cache" to if (s.cache.ok) "ok, ${s.cache.entries} cached items (${s.cache.bytes / 1024} KB)" else "unavailable",
+    )
+}

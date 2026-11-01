@@ -4,6 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { cached } from "../cache.ts";
 import { envInt } from "../env.ts";
 import { limiter } from "../limit.ts";
+import { tracked } from "../status.ts";
 
 const run = promisify(execFile);
 
@@ -55,7 +56,7 @@ export const formatSelector = (q: number, lang: string) => {
 export async function resolveUrls(id: string, q: number, lang: string): Promise<string[]> {
   if (!VIDEO_ID.test(id)) throw new Error("bad video id");
   return cached(`dlp:${id}-${q}-${lang}`, 5 * 60_000, () =>
-    resolveSlots.run(async () => {
+    resolveSlots.run(() => tracked(async () => {
       const { stdout } = await run(
         YTDLP(),
         ["--no-playlist", "--no-warnings", "-f", formatSelector(q, lang), "-g", "--", `https://www.youtube.com/watch?v=${id}`],
@@ -64,7 +65,7 @@ export async function resolveUrls(id: string, q: number, lang: string): Promise<
       const urls = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
       if (!urls.length) throw new Error("yt-dlp returned no stream URL");
       return urls;
-    }),
+    })),
   );
 }
 

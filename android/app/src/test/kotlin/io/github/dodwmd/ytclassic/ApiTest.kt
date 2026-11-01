@@ -36,6 +36,7 @@ class ApiTest {
             val path = ex.requestURI.path
             val (status, body) = when {
                 path == "/healthz" -> 200 to "ok"
+                path == "/api/status" -> 200 to fixture("status")
                 path == "/api/home" -> 200 to fixture("home")
                 path == "/api/search" -> 200 to fixture("search")
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
@@ -73,6 +74,23 @@ class ApiTest {
         assertEquals("Fireship", home.subs.single().title)
         assertTrue(home.feed.isNotEmpty())
         assertNull(home.feed.first().views) // fallback feed items have no view count
+    }
+
+    @Test
+    fun statusParsesRealResponseAndFormatsRows() = runBlocking {
+        val s = api.status()
+        assertEquals("ok", s.health)
+        assertEquals("2026.10.26", s.ytdlp.version)
+        assertEquals("bot-check", s.resolves.lastFailure?.reason)
+        assertFalse(fixture("status").contains("videoId"), "the status response carries no video id")
+        val rows = io.github.dodwmd.ytclassic.data.statusRows(s, nowMillis = java.time.Instant.parse("2026-11-01T14:25:00Z").toEpochMilli()).toMap()
+        assertEquals("3 minutes ago", rows["Last successful resolve"])
+        assertEquals("3 minutes ago · bot-check", rows["Last failure"])
+        assertEquals("1 ok, 1 failed", rows["Resolves since start"])
+        assertEquals("8.0.1", rows["ffmpeg"])
+        val empty = io.github.dodwmd.ytclassic.data.statusRows(io.github.dodwmd.ytclassic.data.StatusResponse()).toMap()
+        assertEquals("never", empty["Last failure"])
+        assertEquals("not found", empty["yt-dlp"])
     }
 
     @Test

@@ -1,0 +1,1 @@
+{"health":"ok","ytdlp":{"version":"2026.10.26","present":true},"resolves":{"ok":1,"failed":1,"consecutiveFailures":0,"lastSuccess":{"at":"2026-11-01T14:21:47.056Z"},"lastFailure":{"at":"2026-11-01T14:21:47.048Z","reason":"bot-check"}},"ffmpeg":{"present":true,"version":"8.0.1"},"node":"v22.22.0","uptimeSeconds":0,"cache":{"ok":true,"entries":0,"bytes":0}}

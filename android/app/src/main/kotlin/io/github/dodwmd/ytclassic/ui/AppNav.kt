@@ -105,7 +105,8 @@ fun AppNav(app: App, openVideoId: String? = null) {
             composable("channel/{id}", listOf(navArgument("id") { type = NavType.StringType })) { entry ->
                 ChannelScreen(app.api, entry.arguments?.getString("id").orEmpty(), openVideo)
             }
-            composable("settings") { SettingsScreen(app, onDone = toHome) }
+            composable("status") { StatusScreen(app.api) }
+            composable("settings") { SettingsScreen(app, onDone = toHome, onStatus = { nav.navigate("status") }) }
         }
         }
     }
