@@ -6,5 +6,6 @@ k3s-kubeconfig
 .env
 shell.local.nix
 backend/data/
-# global ignore has *result* (nix build symlinks); this is a real source file
-!backend/src/views/results.ts
+# the global ignore has *result* (nix build symlinks); these are real source files
+!frontend/public/results.html
+!frontend/public/js/results.js

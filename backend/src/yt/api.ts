@@ -1,5 +1,5 @@
 import { cached } from "../cache.ts";
-import { parseDuration } from "../format.ts";
+import { isoSeconds } from "../format.ts";
 import { fetchT } from "../http.ts";
 
 export interface VideoSummary {
@@ -10,8 +10,7 @@ export interface VideoSummary {
   description: string;
   publishedAt: string;
   thumb: string;
-  duration?: string; // ISO 8601, Data API only
-  durationLabel?: string; // e.g. "3:33"
+  durationSeconds?: number;
   views?: string;
 }
 export interface SearchPage {
@@ -54,8 +53,8 @@ export function apiSearch(q: string, pageToken = ""): Promise<SearchPage> {
     }));
     const details = await videoDetails(items.map((i) => i.id));
     for (const it of items) {
-      it.duration = details.get(it.id)?.duration;
-      it.durationLabel = it.duration ? parseDuration(it.duration) : undefined;
+      const iso = details.get(it.id)?.duration;
+      it.durationSeconds = iso ? isoSeconds(iso) : undefined;
       it.views = details.get(it.id)?.views;
     }
     return { items, nextPageToken: data.nextPageToken, prevPageToken: data.prevPageToken };
@@ -87,7 +86,7 @@ export function video(id: string): Promise<VideoDetail | null> {
       description: v.snippet.description,
       publishedAt: v.snippet.publishedAt,
       thumb: v.snippet.thumbnails?.medium?.url ?? "",
-      duration: v.contentDetails.duration,
+      durationSeconds: isoSeconds(v.contentDetails.duration),
       views: v.statistics?.viewCount,
       likes: v.statistics?.likeCount,
     };

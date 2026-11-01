@@ -1,9 +1,8 @@
 // Seek bar for live-remuxed streams. A plain <video> can't seek these (unknown length/byte layout),
 // so we show the real duration (from the API) and restart the stream at ?t= when seeking outside the buffer.
-(() => {
-  const root = document.getElementById("player");
-  const v = root && root.querySelector("video");
-  const total = root ? Number(root.dataset.duration) : 0;
+export function initPlayer(root) {
+  const v = root.querySelector("video");
+  const total = Number(root.dataset.duration);
   if (!v || !(total > 0)) return; // no known duration (e.g. live): keep native controls
   const $ = (s) => root.querySelector(s);
   const bar = $(".bar"), pp = $(".pp"), time = $(".time"), vol = $(".vol"), fs = $(".fs");
@@ -56,4 +55,4 @@
     else if (e.key === "ArrowRight") seek(now() + 10);
   });
   paint();
-})();
+}

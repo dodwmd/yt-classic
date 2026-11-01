@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Home - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<script type="module" src="/static/js/home.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to load its data.</p></noscript>
+  <p id="status" role="status">Loading&hellip;</p>
+  <p id="empty" hidden>No subscriptions yet. Search for a video, open its channel and click Subscribe.</p>
+  <div id="home" hidden>
+    <div id="feed">
+      <h3>New from your subscriptions</h3>
+      <div class="grid" id="feed-grid"></div>
+      <div id="recs" hidden>
+        <h3>Recommended for you</h3>
+        <div class="grid" id="recs-grid"></div>
+      </div>
+    </div>
+    <div id="subs">
+      <h3>Subscriptions</h3>
+      <ul id="subs-list"></ul>
+    </div>
+  </div>
+</div>
+<template id="t-card">
+  <div class="card">
+    <a class="thumb"><img width="160" height="90" alt=""><span class="dur" hidden></span></a>
+    <a class="title"></a>
+    <div class="sub"><a class="chan" hidden></a><span class="byline" hidden></span><br><span class="meta"></span></div>
+  </div>
+</template>
+<template id="t-sub"><li><a></a></li></template>
+</body>
+</html>

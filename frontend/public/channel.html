@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channel - YouTube Classic</title>
+<link rel="stylesheet" href="/static/classic.css">
+<script type="module" src="/static/js/channel.js"></script>
+</head>
+<body>
+<div id="masthead">
+  <a id="logo" href="/">You<span>Tube</span></a>
+  <form action="/results" method="get">
+    <input type="text" name="search_query" id="q" aria-label="Search">
+    <button type="submit">Search</button>
+  </form>
+</div>
+<div id="page">
+  <noscript><p>This page needs JavaScript to load its data.</p></noscript>
+  <p id="status" role="status">Loading&hellip;</p>
+  <div id="channel" hidden>
+    <img class="banner" id="banner" alt="" hidden>
+    <div class="chead">
+      <img id="avatar" width="48" height="48" alt="">
+      <h1 id="name"></h1>
+      <button type="button" id="sub-btn"></button>
+    </div>
+    <details><summary>About</summary><div class="desc" id="about"></div></details>
+    <h3>Uploads</h3>
+    <div class="grid" id="uploads"></div>
+    <nav class="pager" aria-label="Pagination"><a id="prev" hidden>&laquo; Newer</a> <a id="next" hidden>Older &raquo;</a></nav>
+  </div>
+</div>
+<template id="t-card">
+  <div class="card">
+    <a class="thumb"><img width="160" height="90" alt=""><span class="dur" hidden></span></a>
+    <a class="title"></a>
+    <div class="sub"><a class="chan" hidden></a><span class="byline" hidden></span><br><span class="meta"></span></div>
+  </div>
+</template>
+</body>
+</html>
