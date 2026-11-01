@@ -33,12 +33,12 @@ class ClassicColors(
 private val LightClassic = ClassicColors(
     masthead = Color(0xFFE8E8E8), link = Color(0xFF0033CC), muted = Color(0xFF666666), logoText = Color(0xFF333333),
     fieldBackground = Color.White, fieldBorder = Color(0xFFBBBBBB), fieldText = Color(0xFF222222), fieldHint = Color(0xFF888888),
-    sliderActive = LogoRed, sliderInactive = Color(0xFF9A9A9A),
+    sliderActive = LogoRed, sliderInactive = Color(0xFF8A8A8A),
 )
 private val DarkClassic = ClassicColors(
     masthead = Color(0xFF242424), link = Color(0xFF78AAFF), muted = Color(0xFFA8A8A8), logoText = Color(0xFFE4E4E4),
     fieldBackground = Color(0xFF121212), fieldBorder = Color(0xFF555555), fieldText = Color(0xFFE4E4E4), fieldHint = Color(0xFF999999),
-    sliderActive = Color(0xFFFF6B6B), sliderInactive = Color(0xFF8C8C8C),
+    sliderActive = Color(0xFFFF6B6B), sliderInactive = Color(0xFF5A5A5A),
 )
 
 private val LocalClassic = staticCompositionLocalOf { LightClassic }
