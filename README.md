@@ -27,6 +27,13 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   progress bar, videos watched to the end get a "Watched" badge in the feed, search, channel and related lists, and
   `/history` lists everything with Remove and "Clear all history". The Android app does the same, also while the app
   is in the background.
+- **Watch later and playlists**: you build them yourself (nothing is suggested or generated). A built-in "Watch later"
+  list always exists; a `+`/check toggle (44 px on touch, keyboard reachable) on every video in feed, search, channel,
+  history and related lists, and a button next to the title on the watch page, adds or removes a video. `/playlists`
+  lists your playlists (create, rename, delete; max 50, names up to 80 characters, unique ignoring case) and
+  `/playlists?id=N` shows one (max 500 videos) with Remove, Move to top and Play, which opens the first video; there
+  is no auto-advance. Title, channel and duration are copied from the server's own lookup, never from the client.
+  The Android app has the same: a Watch later toggle on rows and the watch screen, Playlists and playlist screens.
 - **Channel pages**: banner, uploads grid, Subscribe/Unsubscribe (stored locally, no Google login).
 - **Audio language**: prefers English audio on auto-dubbed videos; override per video with `?a=pt`.
 
@@ -43,8 +50,8 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
-  `DELETE /api/history/:id`, `POST /api/history/clear`, `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
-- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `login.html`, the CSS,
+  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
+- **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `playlists.html`, `login.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
 - **Playback:** YouTube no longer offers a single file with audio and video together, so the backend takes the
@@ -504,6 +511,7 @@ backend/
   src/yt/rss.ts          channel RSS feeds
   src/db.ts              SQLite connection + migrations (DATA_DIR/yt.db)
   src/history.ts         watch history and resume positions (SQLite)
+  src/playlists.ts       Watch later and user playlists (SQLite)
   src/auth.ts            optional shared access token: bearer/cookie checks, constant-time compare, failure limiter
   src/store.ts           subscriptions (SQLite, imports the old subscriptions.json; atomic bulk addSubs)
   src/subsio.ts          subscription import (Takeout CSV, OPML, URL list) and export parsers/writers

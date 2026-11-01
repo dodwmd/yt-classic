@@ -15,11 +15,11 @@ export async function api(path, init) {
   return body;
 }
 
-const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/;
+const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
 const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"]]);
 export function destination(next) {
-  const w = WATCH.exec(next), c = CHANNEL.exec(next);
-  return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : PAGES.get(next) || "/";
+  const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
+  return w ? "/watch?v=" + w[1] : c ? "/channel/" + c[1] : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
 }
 
 const login = document.getElementById("login");
@@ -103,18 +103,56 @@ export const historyCard = (h, meta) => cardNode({
   channelId: h.channelId, channelTitle: h.channelTitle, pct: h.completed ? 0 : pctOf(h), meta,
 });
 
+const form = { "content-type": "application/x-www-form-urlencoded" };
+
+// Watch later toggle. A button (touch and keyboard), never inside a link; a failure is shown right next to it.
+export function laterButton(id, on, title, [add, added] = ["+", "\u2713"]) {
+  const b = document.createElement("button"), msg = document.createElement("span");
+  b.type = "button";
+  b.className = "later";
+  msg.className = "later-msg";
+  msg.setAttribute("role", "alert");
+  b.setAttribute("aria-label", `Watch later: ${title}`);
+  const paint = () => {
+    b.textContent = on ? added : add;
+    b.setAttribute("aria-pressed", on);
+  };
+  paint();
+  b.addEventListener("click", async () => {
+    b.disabled = true;
+    try {
+      await api(on ? `/api/playlists/1/items/${id}` : "/api/playlists/1/items", on ? { method: "DELETE" } : { method: "POST", headers: form, body: new URLSearchParams({ id }) });
+      on = !on;
+      msg.textContent = "";
+    } catch (err) {
+      msg.textContent = err.message || "Failed";
+    }
+    paint();
+    b.disabled = false;
+  });
+  return [b, msg];
+}
+
+// Thumbs not decorated yet (a later page only decorates its new cards). Marks them, so call it once the data is in.
+export const undecorated = (thumbs) => thumbs.filter((a) => !a.dataset.d);
+
 export async function markWatched() {
   try {
-    const thumbs = [...document.querySelectorAll('.thumb[href^="/watch?v="]')].slice(0, 100);
+    const thumbs = undecorated([...document.querySelectorAll('.thumb[href^="/watch?v="]')]).slice(0, 100);
     const id = (a) => new URLSearchParams(a.search).get("v");
     if (!thumbs.length) return;
-    const { ids } = await api(`/api/history/watched?ids=${thumbs.map(id).join(",")}`);
+    const list = thumbs.map(id).join(",");
+    // Without a known membership no toggle is shown (it would claim "not in Watch later"); the next call retries.
+    const [{ ids }, { watchLater }] = await Promise.all([api(`/api/history/watched?ids=${list}`).catch(() => ({ ids: [] })), api(`/api/playlists/membership?ids=${list}`)]);
     for (const a of thumbs) {
-      if (!ids.includes(id(a))) continue;
-      const b = document.createElement("span");
-      b.className = "badge";
-      b.textContent = "Watched";
-      a.append(b);
+      a.dataset.d = 1;
+      if (ids.includes(id(a))) {
+        const b = document.createElement("span");
+        b.className = "badge";
+        b.textContent = "Watched";
+        a.append(b);
+      }
+      a.parentElement.append(...laterButton(id(a), watchLater.includes(id(a)), $(".title", a.parentElement)?.textContent ?? ""));
     }
   } catch {
   }

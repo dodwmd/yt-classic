@@ -73,7 +73,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "subscriptions.js": "subscriptions.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");
@@ -152,6 +152,41 @@ test("login page: nginx route exists, the form posts to the backend (which valid
   }
 });
 
+test("undecorated(): later pages only decorate their new cards", async () => {
+  globalThis.document = { getElementById: () => null };
+  const { undecorated } = await import("../public/js/lib.js");
+  const a = { dataset: {} }, b = { dataset: {} };
+  assert.deepEqual(undecorated([a, b]), [a, b]);
+  a.dataset.d = 1; // what markWatched sets once a thumb has its badge and toggle
+  assert.deepEqual(undecorated([a, b]), [b]);
+  b.dataset.d = 1;
+  assert.deepEqual(undecorated([a, b]), []);
+});
+
+test("markWatched decorates each thumb once, and only when the membership is known", async () => {
+  globalThis.document = { getElementById: () => null, querySelectorAll: () => thumbs, createElement: () => ({ setAttribute() {}, addEventListener() {}, append() {}, dataset: {} }) };
+  const mk = (id) => ({ dataset: {}, search: `?v=${id}`, append() { this.appended = (this.appended ?? 0) + 1; }, parentElement: { append() { this.n = (this.n ?? 0) + 1; }, querySelector: () => null } });
+  const thumbs = [mk("AAAAAAAAAA1"), mk("AAAAAAAAAA2")];
+  let fail = true;
+  const urls = [];
+  globalThis.fetch = async (u) => {
+    urls.push(u);
+    if (String(u).includes("membership") && fail) return { ok: false, status: 500, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => (String(u).includes("membership") ? { watchLater: ["AAAAAAAAAA1"] } : { ids: ["AAAAAAAAAA2"] }) };
+  };
+  const { markWatched } = await import("../public/js/lib.js");
+  await markWatched();
+  assert.ok(thumbs.every((t) => !t.dataset.d && !t.parentElement.n), "a failed membership lookup shows no toggle at all");
+  fail = false;
+  await markWatched();
+  assert.ok(thumbs.every((t) => t.dataset.d && t.parentElement.n === 1));
+  const calls = urls.length;
+  await markWatched(); // e.g. "Load more" with nothing new
+  assert.equal(urls.length, calls, "decorated thumbs are not asked about again");
+  assert.ok(thumbs.every((t) => t.parentElement.n === 1), "no duplicate toggles");
+  assert.equal(thumbs[1].appended, 1, "no duplicate Watched badge");
+});
+
 test("destination() only ever returns one of the known pages, rebuilt from constants and validated ids", async () => {
   globalThis.document = { getElementById: () => null }; // lib.js looks up the login form when it loads
   const { destination } = await import("../public/js/lib.js");
@@ -164,6 +199,9 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination("/"), "/");
   assert.equal(destination("/history"), "/history");
   assert.equal(destination("/subscriptions"), "/subscriptions");
+  assert.equal(destination("/playlists"), "/playlists");
+  assert.equal(destination("/playlists?id=12"), "/playlists?id=12");
+  for (const bad of ["/playlists?id=", "/playlists?id=1x", "/playlists?id=1&x=//evil.com", "/playlists?id=1234567890", "/playlists/"]) assert.equal(destination(bad), "/", bad);
   assert.equal(destination("/constructor"), "/");
   assert.equal(destination("__proto__"), "/");
   assert.equal(destination(`/watch?v=${ID}`), `/watch?v=${ID}`);

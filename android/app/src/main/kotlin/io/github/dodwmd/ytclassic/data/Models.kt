@@ -106,6 +106,39 @@ data class HistoryPage(val items: List<HistoryItem> = emptyList(), val next: Str
 @Serializable
 data class WatchedResponse(val ids: List<String> = emptyList())
 
+/** A user-curated playlist. Id 1 is the built-in "Watch later" ([builtin]): it cannot be renamed or deleted. */
+@Serializable
+data class Playlist(val id: Long, val name: String, val count: Int = 0, val builtin: Boolean = false)
+
+@Serializable
+data class PlaylistsResponse(val playlists: List<Playlist> = emptyList())
+
+/** Reply to create / rename / add: the playlist as it is now ([added] is false when the video was already there). */
+@Serializable
+data class PlaylistReply(val playlist: Playlist? = null, val added: Boolean = false)
+
+/** One saved video; the title and channel are the server's own copy, so a list needs no API calls. */
+@Serializable
+data class PlaylistItem(
+    val id: String,
+    val title: String,
+    val channelId: String = "",
+    val channelTitle: String = "",
+    val thumb: String = "",
+    val durationSeconds: Long = 0,
+    val added: Long = 0,
+)
+
+@Serializable
+data class PlaylistPage(val playlist: Playlist, val items: List<PlaylistItem> = emptyList(), val next: String? = null)
+
+/** `watchLater`: the asked ids that are in Watch later; `any`: those in at least one playlist. */
+@Serializable
+data class MembershipResponse(val watchLater: List<String> = emptyList(), val any: List<String> = emptyList())
+
+@Serializable
+data class OkReply(val removed: Boolean = false, val moved: Boolean = false)
+
 @Serializable
 data class VideoResponse(
     val video: VideoDetail,

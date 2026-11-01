@@ -119,6 +119,39 @@ class YtApi(
         execute(request(url("api/history/clear")).post(FormBody.Builder().build()).build()).use { check(it) }
     }
 
+    suspend fun playlists(): List<Playlist> = get<PlaylistsResponse>("api/playlists").playlists
+
+    suspend fun playlist(id: Long, before: String? = null): PlaylistPage = get("api/playlists/$id", "limit" to "48", "before" to before)
+
+    suspend fun createPlaylist(name: String): Playlist = sendForm("api/playlists", "name" to name).playlist ?: throw ApiException("Unexpected response from the server.")
+
+    suspend fun renamePlaylist(id: Long, name: String): Playlist =
+        sendForm("api/playlists/$id/rename", "name" to name).playlist ?: throw ApiException("Unexpected response from the server.")
+
+    suspend fun deletePlaylist(id: Long) {
+        decode<OkReply>(execute(request(url("api/playlists/$id")).delete().build()))
+    }
+
+    /** Adds the video (the server fills in its title and channel). Returns false when it was already in the playlist. */
+    suspend fun addToPlaylist(id: Long, videoId: String): Boolean = sendForm("api/playlists/$id/items", "id" to videoId).added
+
+    suspend fun removeFromPlaylist(id: Long, videoId: String) {
+        decode<OkReply>(execute(request(url("api/playlists/$id/items/$videoId")).delete().build()))
+    }
+
+    suspend fun moveToTop(id: Long, videoId: String) {
+        decode<OkReply>(execute(request(url("api/playlists/$id/move")).post(FormBody.Builder().add("id", videoId).add("index", "0").build()).build()))
+    }
+
+    /** Which of [ids] (at most 100) are in Watch later. */
+    suspend fun inWatchLater(ids: List<String>): Set<String> =
+        get<MembershipResponse>("api/playlists/membership", "ids" to ids.take(100).joinToString(",")).watchLater.toSet()
+
+    private suspend fun sendForm(path: String, vararg fields: Pair<String, String>): PlaylistReply {
+        val body = FormBody.Builder().apply { for ((k, v) in fields) add(k, v) }.build()
+        return decode(execute(request(url(path)).post(body).build()))
+    }
+
     private suspend fun check(r: Response) {
         if (r.code == 401) throw AuthException(token().isNotBlank())
         if (!r.isSuccessful) throw ApiException("Request failed (${r.code})")

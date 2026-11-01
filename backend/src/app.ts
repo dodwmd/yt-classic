@@ -12,13 +12,14 @@ import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { BusyError } from "./limit.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
+import { MAX_MEMBERSHIP, lookupAllowed, noteLookup, PLAYLIST_ID, addItem, canAdd, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
 import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
 import { SESSION_SECONDS, accessToken, clientIp, cookieHeader, createGate, makeSession, safeEqual, safeNext, sessionKey } from "./auth.ts";
 
 // Local development only: serve the static frontend from here. In containers nginx does this and the
 // frontend directory is not part of the backend image, so these lookups simply find nothing.
 const publicDir = fileURLToPath(new URL("../../frontend/public/", import.meta.url));
-const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html", "/subscriptions": "subscriptions.html", "/login": "login.html" };
+const PAGES: Record<string, string> = { "/": "index.html", "/results": "results.html", "/watch": "watch.html", "/history": "history.html", "/playlists": "playlists.html", "/subscriptions": "subscriptions.html", "/login": "login.html" };
 const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css",
@@ -112,6 +113,25 @@ async function readProgress(req: IncomingMessage): Promise<{ id: string; positio
     position: typeof position === "number" || (typeof position === "string" && position.trim() !== "") ? Number(position) : NaN,
     finished: fin === true || fin === "1" || fin === "true",
   };
+}
+
+/** Small form or JSON bodies (string/number values only); null when too large. */
+async function readParams(req: IncomingMessage): Promise<Record<string, string> | null> {
+  const raw = await readText(req);
+  if (raw === null) return null;
+  const out: Record<string, string> = {};
+  if ((req.headers["content-type"] ?? "").includes("json")) {
+    let o: unknown;
+    try {
+      o = JSON.parse(raw);
+    } catch {
+      o = undefined;
+    }
+    for (const [k, v] of Object.entries(o && typeof o === "object" ? o : {})) if (typeof v === "string" || typeof v === "number") out[k] = String(v);
+  } else {
+    for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
+  }
+  return out;
 }
 
 /** The raw request body, or null when it is larger than [max] (the rest is read and dropped so the client gets the 413). */
@@ -228,6 +248,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const a = url.searchParams.get("a");
     const lang = parseLang(a);
     resolveUrls(id, quality, lang).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
+    refreshMeta({ id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });
     const related = await relatedFor(v);
     const progress = getProgress(id) ?? undefined; // omitted when nothing is known
     return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "", progress });
@@ -278,6 +299,85 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const id = path.slice("/api/history/".length);
     if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
     return json(res, 200, { removed: removeHistory(id) });
+  }
+
+  if (path === "/api/playlists/membership" && req.method === "GET") {
+    return json(res, 200, membership(param("ids").slice(0, MAX_MEMBERSHIP * 12).split(",")));
+  }
+
+  if (path === "/api/playlists" || path.startsWith("/api/playlists/")) {
+    const parts = path === "/api/playlists" ? [] : path.slice("/api/playlists/".length).split("/");
+    const [pid, sub, vid] = parts;
+    const write = req.method === "POST" || req.method === "DELETE";
+    if (write && !sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const failure = (f: string) =>
+      f === "invalid" ? json(res, 400, { error: "Names are 1 to 80 characters." })
+      : f === "exists" ? json(res, 409, { error: "A playlist with that name already exists." })
+      : f === "full" ? json(res, 409, { error: "Limit reached." })
+      : f === "builtin" ? json(res, 403, { error: "Watch later cannot be renamed or deleted." })
+      : json(res, 404, { error: "playlist not found" });
+
+    if (!pid) {
+      if (req.method === "GET") return json(res, 200, { playlists: listPlaylists() });
+      if (req.method !== "POST") return json(res, 405, { error: "method not allowed" });
+      const p = await readParams(req);
+      if (!p) return json(res, 413, { error: "body too large" });
+      const made = createPlaylist(p.name ?? "");
+      return typeof made === "string" ? failure(made) : json(res, 200, { playlist: made });
+    }
+    if (!PLAYLIST_ID.test(pid)) return json(res, 400, { error: "bad playlist id" });
+    const id = Number(pid);
+
+    if (!sub) {
+      if (req.method === "GET") {
+        const limit = Number(param("limit") || 50);
+        if (!Number.isInteger(limit) || limit < 1 || limit > MAX_PAGE) return json(res, 400, { error: "bad limit" });
+        const playlist = getPlaylist(id);
+        if (!playlist) return failure("missing");
+        try {
+          return json(res, 200, { playlist, ...listItems(id, limit, param("before")) });
+        } catch {
+          return json(res, 400, { error: "bad before" });
+        }
+      }
+      if (req.method === "DELETE") {
+        const r = deletePlaylist(id);
+        return r === "removed" ? json(res, 200, { removed: true }) : failure(r);
+      }
+    } else if (sub === "rename" && req.method === "POST" && !vid) {
+      const p = await readParams(req);
+      if (!p) return json(res, 413, { error: "body too large" });
+      const r = renamePlaylist(id, p.name ?? "");
+      return typeof r === "string" ? failure(r) : json(res, 200, { playlist: r });
+    } else if (sub === "items" && req.method === "POST" && !vid) {
+      const p = await readParams(req);
+      if (!p) return json(res, 413, { error: "body too large" });
+      const videoId = p.id ?? "";
+      if (!VIDEO_ID.test(videoId)) return json(res, 400, { error: "bad video id" });
+      const can = canAdd(id, videoId);
+      if (can === "missing" || can === "full") return failure(can === "full" ? "full" : "missing");
+      if (can === "present") return json(res, 200, { added: false, playlist: getPlaylist(id) });
+      // Title, channel and duration come from the server's own lookup, never from the request. A failed lookup adds nothing.
+      if (!lookupAllowed()) return json(res, 429, { error: "too many new Watch later lookups; try again later" }, { "retry-after": "600" });
+      noteLookup();
+      const v = await video(videoId);
+      if (!v) return json(res, 404, { error: "video not found" });
+      const r = addItem(id, { id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });
+      if (r === "full" || r === "missing") return failure(r);
+      return json(res, 200, { added: r === "added", playlist: getPlaylist(id) });
+    } else if (sub === "items" && req.method === "DELETE" && vid && parts.length === 3) {
+      if (!VIDEO_ID.test(vid)) return json(res, 400, { error: "bad video id" });
+      if (!getPlaylist(id)) return failure("missing");
+      return json(res, 200, { removed: removeItem(id, vid) });
+    } else if (sub === "move" && req.method === "POST" && !vid) {
+      const p = await readParams(req);
+      if (!p) return json(res, 413, { error: "body too large" });
+      const index = Number(p.index ?? "");
+      if (!VIDEO_ID.test(p.id ?? "") || p.index === undefined || p.index.trim() === "" || !Number.isInteger(index) || index < 0 || index >= 100_000) return json(res, 400, { error: "bad move" });
+      if (!getPlaylist(id)) return failure("missing");
+      return moveItem(id, p.id!, index) ? json(res, 200, { moved: true }) : json(res, 404, { error: "video is not in this playlist" });
+    }
+    return json(res, 404, { error: "not found" });
   }
 
   if (path.startsWith("/api/channel/")) {

@@ -1,0 +1,29 @@
+{
+  "playlist": {
+    "id": 1,
+    "name": "Watch later",
+    "count": 5,
+    "builtin": true
+  },
+  "items": [
+    {
+      "id": "dQw4w9WgXc0",
+      "title": "How a bicycle works",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Chan 0",
+      "thumb": "https://i.ytimg.com/vi/dQw4w9WgXQ0/mqdefault.jpg",
+      "durationSeconds": 120,
+      "added": 1793547793540
+    },
+    {
+      "id": "dQw4w9WgXc1",
+      "title": "Nix in 100 seconds",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Chan 1",
+      "thumb": "https://i.ytimg.com/vi/dQw4w9WgXQ0/mqdefault.jpg",
+      "durationSeconds": 240,
+      "added": 1793547793541
+    }
+  ],
+  "next": "1.2"
+}

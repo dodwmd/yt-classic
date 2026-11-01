@@ -7,7 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp } from "./app.ts";
 import { clearCache } from "./cache.ts";
+import { getDb } from "./db.ts";
 import { clearHistory } from "./history.ts";
+import { deletePlaylist, listPlaylists, resetLookupLimit, noteLookup, MAX_LOOKUPS_PER_HOUR } from "./playlists.ts";
 import { killChildren } from "./yt/dlp.ts";
 
 const CHANNEL = "UC" + "a".repeat(22);
@@ -74,6 +76,9 @@ after(() => {
 beforeEach(() => {
   clearCache();
   clearHistory();
+  resetLookupLimit();
+  for (const p of listPlaylists()) if (!p.builtin) deletePlaylist(p.id);
+  getDb().exec("DELETE FROM playlist_items");
   videoCalls = 0;
   rmSync(process.env.PIDFILE!, { force: true });
   delete process.env.FAKE_RESOLVE_SLEEP;
@@ -82,11 +87,11 @@ beforeEach(() => {
 });
 
 function get(path: string, opts: { method?: string; headers?: Record<string, string>; body?: string | Buffer } = {}) {
-  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+  return new Promise<{ status: number; body: string; headers: Record<string, unknown> }>((resolve, reject) => {
     const req = request({ host: "127.0.0.1", port, path, method: opts.method ?? "GET", headers: opts.headers }, (res) => {
       let body = "";
       res.on("data", (d) => (body += d));
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body, headers: res.headers }));
     });
     req.on("error", reject);
     req.end(opts.body);
@@ -402,4 +407,148 @@ test("export: the CSV is formula-safe and still imports back", async () => {
   await importPost(csv);
   assert.equal((db.prepare("SELECT title FROM subscriptions WHERE id = ?").get(A) as { title: string }).title, "=1+1");
   db.exec("DELETE FROM subscriptions");
+});
+
+// ---- playlists ----
+const J = { "content-type": "application/json" };
+const evil = { ...form, origin: "http://evil.example" };
+const body = (r: { body: string }) => JSON.parse(r.body);
+const mkList = async (name: string) => body(await post("/api/playlists", `name=${encodeURIComponent(name)}`)).playlist.id as number;
+
+test("playlists: create, list, rename, delete; Watch later is protected", async () => {
+  assert.deepEqual(body(await get("/api/playlists")).playlists, [{ id: 1, name: "Watch later", count: 0, builtin: true }]);
+  const id = await mkList("Music");
+  assert.equal((await post("/api/playlists", "name=music")).status, 409);
+  assert.equal((await post("/api/playlists", "name=")).status, 400);
+  assert.equal((await post("/api/playlists", JSON.stringify({ name: "x".repeat(81) }), J)).status, 400);
+  assert.equal((await post("/api/playlists", "name=" + "x".repeat(5000))).status, 413);
+  assert.equal((await post(`/api/playlists/${id}/rename`, "name=Tunes")).status, 200);
+  assert.deepEqual(body(await get("/api/playlists")).playlists.map((p: { name: string }) => p.name), ["Watch later", "Tunes"]);
+  assert.equal((await post("/api/playlists/1/rename", "name=Mine")).status, 403);
+  assert.equal((await get("/api/playlists/1", { method: "DELETE" })).status, 403);
+  assert.equal((await post("/api/playlists/77/rename", "name=Mine")).status, 404);
+  assert.equal((await post("/api/playlists/abc/rename", "name=Mine")).status, 400);
+  assert.equal((await get(`/api/playlists/${id}`, { method: "DELETE" })).status, 200);
+  assert.equal((await get(`/api/playlists/${id}`, { method: "DELETE" })).status, 404);
+  assert.equal((await get(`/api/playlists/${id}`)).status, 404);
+  assert.equal((await get("/api/playlists", { method: "PUT" })).status, 405);
+});
+
+test("playlists: adding takes metadata from the server, dedupes, and a failing lookup creates nothing", async () => {
+  const r = await post("/api/playlists/1/items", `id=${VID}&title=EVIL&thumb=http://evil&duration=1&channelTitle=EVIL`);
+  assert.equal(r.status, 200);
+  assert.equal(body(r).added, true);
+  assert.equal(body(r).playlist.count, 1);
+  const [item] = body(await get("/api/playlists/1")).items;
+  assert.deepEqual({ ...item, added: 0 }, { id: VID, title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", thumb: "https://i.ytimg.com/server.jpg", durationSeconds: 600, added: 0 });
+  const calls = videoCalls;
+  assert.equal(body(await post("/api/playlists/1/items", JSON.stringify({ id: VID }), J)).added, false);
+  assert.equal(videoCalls, calls, "an existing item needs no lookup");
+  assert.equal(body(await get("/api/playlists/1")).items.length, 1);
+
+  assert.equal((await post("/api/playlists/1/items", "id=bad")).status, 400);
+  assert.equal((await post("/api/playlists/1/items", "")).status, 400);
+  assert.equal((await post("/api/playlists/99/items", `id=${VID}`)).status, 404);
+  assert.equal((await post("/api/playlists/1/items", "id=NOTFOUND000")).status, 404);
+  const real = console.error;
+  console.error = () => {};
+  try {
+    assert.equal((await post("/api/playlists/1/items", "id=FAILING0000")).status, 502);
+  } finally {
+    console.error = real;
+  }
+  assert.equal(body(await get("/api/playlists/1")).items.length, 1, "failed lookups must not add anything");
+});
+
+test("playlists: remove and move", async () => {
+  const ids = ["AAAAAAAAAA1", "AAAAAAAAAA2", "AAAAAAAAAA3"];
+  for (const i of ids) await post("/api/playlists/1/items", `id=${i}`);
+  const order = async () => body(await get("/api/playlists/1")).items.map((i: { id: string }) => i.id);
+  assert.deepEqual(await order(), ids);
+  assert.equal((await post("/api/playlists/1/move", `id=${ids[2]}&index=0`)).status, 200);
+  assert.deepEqual(await order(), [ids[2], ids[0], ids[1]]);
+  assert.equal((await post("/api/playlists/1/move", JSON.stringify({ id: ids[0], index: 2 }), J)).status, 200);
+  assert.deepEqual(await order(), [ids[2], ids[1], ids[0]]);
+  for (const bad of [`id=${ids[0]}`, `id=${ids[0]}&index=-1`, `id=${ids[0]}&index=1.5`, `id=${ids[0]}&index=x`, `id=${ids[0]}&index=`, `id=bad&index=0`]) {
+    assert.equal((await post("/api/playlists/1/move", bad)).status, 400, bad);
+  }
+  assert.equal((await post("/api/playlists/1/move", `id=AAAAAAAAAA9&index=0`)).status, 404);
+  assert.equal((await post("/api/playlists/50/move", `id=${ids[0]}&index=0`)).status, 404);
+  assert.equal((await get("/api/playlists/1/items/bad", { method: "DELETE" })).status, 400);
+  assert.equal((await get("/api/playlists/50/items/AAAAAAAAAA1", { method: "DELETE" })).status, 404);
+  assert.deepEqual(body(await get(`/api/playlists/1/items/${ids[1]}`, { method: "DELETE" })), { removed: true });
+  assert.deepEqual(body(await get(`/api/playlists/1/items/${ids[1]}`, { method: "DELETE" })), { removed: false });
+  assert.deepEqual(await order(), [ids[2], ids[0]]);
+});
+
+test("playlists: paging validates limit/before and walks every item", async () => {
+  for (const i of [1, 2, 3, 4, 5]) await post("/api/playlists/1/items", `id=AAAAAAAAAA${i}`);
+  assert.equal((await get("/api/playlists/1?limit=0")).status, 400);
+  assert.equal((await get("/api/playlists/1?limit=101")).status, 400);
+  assert.equal((await get("/api/playlists/1?before=abc")).status, 400);
+  const seen: string[] = [];
+  let before = "";
+  for (let n = 0; n < 10; n++) {
+    const page = body(await get(`/api/playlists/1?limit=2&before=${before}`));
+    seen.push(...page.items.map((i: { id: string }) => i.id));
+    if (!page.next) break;
+    before = page.next;
+  }
+  assert.deepEqual(seen, [1, 2, 3, 4, 5].map((i) => `AAAAAAAAAA${i}`));
+});
+
+test("playlists: every write refuses cross-origin requests; reads are unaffected", async () => {
+  const id = await mkList("Keep");
+  await post("/api/playlists/1/items", `id=${VID}`);
+  assert.equal((await post("/api/playlists", "name=Evil", evil)).status, 403);
+  assert.equal((await post(`/api/playlists/${id}/rename`, "name=Evil", evil)).status, 403);
+  assert.equal((await post("/api/playlists/1/items", "id=AAAAAAAAAA2", evil)).status, 403);
+  assert.equal((await post("/api/playlists/1/move", `id=${VID}&index=0`, evil)).status, 403);
+  assert.equal((await get(`/api/playlists/1/items/${VID}`, { method: "DELETE", headers: { origin: "http://evil.example" } })).status, 403);
+  assert.equal((await get(`/api/playlists/${id}`, { method: "DELETE", headers: { "sec-fetch-site": "cross-site" } })).status, 403);
+  const lists = body(await get("/api/playlists")).playlists;
+  assert.deepEqual(lists.map((p: { name: string; count: number }) => [p.name, p.count]), [["Watch later", 1], ["Keep", 0]]);
+});
+
+test("playlists: deleting a playlist removes its items from membership", async () => {
+  const id = await mkList("Temp");
+  await post(`/api/playlists/${id}/items`, `id=${VID}`);
+  assert.deepEqual(body(await get(`/api/playlists/membership?ids=${VID},bad`)), { watchLater: [], any: [VID] });
+  await post("/api/playlists/1/items", `id=${VID}`);
+  assert.deepEqual(body(await get(`/api/playlists/membership?ids=${VID}`)), { watchLater: [VID], any: [VID] });
+  await get(`/api/playlists/${id}`, { method: "DELETE" });
+  assert.deepEqual(body(await get(`/api/playlists/membership?ids=${VID}`)), { watchLater: [VID], any: [VID] });
+  await get(`/api/playlists/1/items/${VID}`, { method: "DELETE" });
+  assert.deepEqual(body(await get(`/api/playlists/membership?ids=${VID}`)), { watchLater: [], any: [] });
+  assert.deepEqual(body(await get("/api/playlists/membership")), { watchLater: [], any: [] });
+});
+
+test("playlists: parallel requests for one video add it once", async () => {
+  const rs = await Promise.all(Array.from({ length: 8 }, () => post("/api/playlists/1/items", `id=${VID}`)));
+  assert.ok(rs.every((r) => r.status === 200));
+  assert.equal(rs.filter((r) => body(r).added).length, 1);
+  assert.equal(body(await get("/api/playlists/1")).items.length, 1);
+});
+
+test("playlists: opening the video refreshes the stored copy (lazily, no extra lookups)", async () => {
+  await post("/api/playlists/1/items", `id=${VID}`);
+  getDb().exec("UPDATE playlist_items SET title = 'stale'");
+  await get(`/api/video/${VID}`);
+  assert.equal(body(await get("/api/playlists/1")).items[0].title, "Server title");
+});
+
+test("playlists: new-video lookups are capped globally per hour (429 + Retry-After); existing items and removals still work", async () => {
+  await post("/api/playlists/1/items", `id=${VID}`);
+  for (let i = 0; i < MAX_LOOKUPS_PER_HOUR; i++) noteLookup();
+  const r = await post("/api/playlists/1/items", "id=AAAAAAAAAA2");
+  assert.equal(r.status, 429);
+  assert.equal(r.headers["retry-after"], "600");
+  const calls = videoCalls;
+  const again = await get("/api/playlists/1", {});
+  assert.equal(body(again).items.length, 1, "a refused add changes nothing");
+  assert.equal(body(await post("/api/playlists/1/items", `id=${VID}`)).added, false, "an item already there needs no lookup");
+  assert.equal(videoCalls, calls);
+  assert.deepEqual(body(await get(`/api/playlists/1/items/${VID}`, { method: "DELETE" })), { removed: true });
+  resetLookupLimit();
+  assert.equal((await post("/api/playlists/1/items", "id=AAAAAAAAAA2")).status, 200);
 });
