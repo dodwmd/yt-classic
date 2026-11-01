@@ -5,10 +5,15 @@ import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.AuthException
 import io.github.dodwmd.ytclassic.data.FeedFilter
 import io.github.dodwmd.ytclassic.data.FeedPager
+import io.github.dodwmd.ytclassic.data.HomeFeed
+import io.github.dodwmd.ytclassic.data.HomeState
 import io.github.dodwmd.ytclassic.data.FeedPrefs
 import io.github.dodwmd.ytclassic.data.FeedState
 import io.github.dodwmd.ytclassic.data.YtApi
-import kotlinx.coroutines.async
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
@@ -18,6 +23,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -29,6 +35,7 @@ class FeedTest {
     private val auth = mutableListOf<String?>()
     private val bodies = mutableListOf<String>()
     private var reply: Pair<Int, String>? = null
+    private var failPrefs = false
     private var slowFirst = false // the first page of /api/feed answers late
     private var token = ""
     private val api get() = YtApi(server = { "127.0.0.1:${server.address.port}" }, token = { token })
@@ -50,6 +57,12 @@ class FeedTest {
                 path == "/api/feed" && "before=" in query -> 200 to fixture("feed-page2")
                 path == "/api/feed" && "shorts=hide" in query -> 200 to fixture("feed-filtered")
                 path == "/api/feed" -> 200 to fixture("feed-page1")
+                path == "/api/prefs" && failPrefs -> 500 to """{"error":"disk full"}"""
+                // The real server answers a POST with the prefs it now holds; with the body we sent that is exactly this.
+                path == "/api/prefs" && ex.requestMethod == "POST" -> {
+                    val f = bodies.last().split("&").associate { it.substringBefore("=") to it.substringAfter("=") }
+                    200 to """{"hideWatched":${f["hideWatched"] == "1"},"shorts":"${f["shorts"]}","live":"${f["live"]}"}"""
+                }
                 path == "/api/prefs" -> 200 to fixture("prefs")
                 else -> 404 to """{"error":"not found"}"""
             }
@@ -62,15 +75,13 @@ class FeedTest {
     }
 
     @AfterTest
-    fun stop() = server.stop(0)
-
-    private fun state(filter: FeedFilter = FeedFilter()) = runBlocking {
-        val home = api.home()
-        FeedState(filter, home.feed, home.next)
+    fun stop() {
+        scope.cancel()
+        server.stop(0)
     }
 
     @Test
-    fun `home keeps its shape and carries the saved filters`() = runBlocking {
+    fun `home keeps its shape and carries the saved filters`() = runBlocking<Unit> {
         val home = api.home()
         assertEquals(10, home.feed.size)
         assertNull(home.next)
@@ -79,7 +90,7 @@ class FeedTest {
     }
 
     @Test
-    fun `the filter is sent explicitly and the cursor opaquely`() = runBlocking {
+    fun `the filter is sent explicitly and the cursor opaquely`() = runBlocking<Unit> {
         val f = FeedFilter(channel = "UCaaaaaaaaaaaaaaaaaaaaaa", hideWatched = true, hideShorts = true)
         val page = api.feed(f)
         assertEquals(6, page.items.size, "the canned answer for shorts=hide")
@@ -101,7 +112,7 @@ class FeedTest {
     }
 
     @Test
-    fun `prefs are read and written as a form`() = runBlocking {
+    fun `prefs are read and written as a form`() = runBlocking<Unit> {
         val saved = api.setPrefs(FeedPrefs(hideWatched = true, shorts = "hide", live = "show"))
         assertEquals(FeedPrefs(true, "hide", "show"), saved)
         assertEquals("POST /api/prefs", requests.last())
@@ -110,7 +121,7 @@ class FeedTest {
     }
 
     @Test
-    fun `every feed and prefs request carries the token`() = runBlocking {
+    fun `every feed and prefs request carries the token`() = runBlocking<Unit> {
         token = "s3cret-token"
         api.feed(FeedFilter())
         api.prefs()
@@ -121,67 +132,157 @@ class FeedTest {
         Unit
     }
 
-    @Test
-    fun `refresh replaces the list, load more appends the next page once`() = runBlocking {
-        val pager = FeedPager(api)
-        val seen = mutableListOf<FeedState>()
-        val first = pager.refresh(state(), FeedFilter(hideShorts = true, hideLive = true)) { seen += it }!!
-        assertTrue(seen.first().busy, "the controls show the request in flight")
-        assertEquals(listOf("aVid0000000", "bVid0000000", "aVid0000002", "bVid0000002", "aVid0000004", "bVid0000004"), first.items.map { it.id })
-        assertNull(first.next)
-        assertEquals(750L, first.items[0].durationSeconds)
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private fun pager(filter: FeedFilter = FeedFilter()): FeedPager = runBlocking {
+        val home = api.home()
+        FeedPager(api, scope, FeedState(filter, home.feed, home.next))
+    }
+    private fun ids(p: FeedPager) = p.state.value.items.map { it.id }
 
-        val p1 = pager.refresh(first, FeedFilter()) { }!!
-        assertEquals(4, p1.items.size)
-        val p2 = pager.more(p1) { }!!
-        assertEquals(8, p2.items.size)
-        assertEquals(p2.items.map { it.id }.distinct(), p2.items.map { it.id })
-        assertFalse(p2.busy)
-        assertNull(pager.more(p2.copy(next = null)) { }, "nothing to load without a cursor")
+    @Test
+    fun `refresh replaces the list, load more appends the next page once`() = runBlocking<Unit> {
+        val p = pager()
+        p.refresh(FeedFilter(hideShorts = true, hideLive = true))
+        assertTrue(p.state.value.busy, "the controls show the request in flight")
+        p.idle()
+        assertEquals(listOf("aVid0000000", "bVid0000000", "aVid0000002", "bVid0000002", "aVid0000004", "bVid0000004"), ids(p))
+        assertNull(p.state.value.next)
+        assertEquals(750L, p.state.value.items[0].durationSeconds)
+
+        p.refresh(FeedFilter())
+        p.idle()
+        assertEquals(4, p.state.value.items.size)
+        p.more()
+        p.idle()
+        assertEquals(8, p.state.value.items.size)
+        assertEquals(ids(p).distinct(), ids(p))
+        assertFalse(p.state.value.busy)
+        assertNotNull(p.state.value.next, "the second fixture page still has a cursor")
     }
 
     @Test
-    fun `load more is ignored while a request is running`() = runBlocking {
-        val pager = FeedPager(api)
-        val p1 = pager.refresh(state(), FeedFilter()) { }!!
-        val before = requests.size
-        assertNull(pager.more(p1.copy(busy = true)) { })
-        assertEquals(before, requests.size, "no request was made")
-        val a = async { pager.more(p1) { } }
-        assertNotNull(a.await())
-        assertEquals(before + 1, requests.size)
-    }
-
-    @Test
-    fun `a filter change discards the answer of the earlier request`() = runBlocking {
+    fun `load more during a refresh does nothing and the refresh stands`() = runBlocking<Unit> {
         slowFirst = true
-        val pager = FeedPager(api)
-        val published = mutableListOf<FeedState>()
-        val start = state()
-        val old = async { pager.refresh(start, FeedFilter()) { published += it } }
-        delay(100) // the slow first request is in flight
-        slowFirst = false
-        val latest = pager.refresh(start, FeedFilter(hideShorts = true)) { published += it }
-        assertNull(old.await(), "superseded")
-        assertEquals(6, latest!!.items.size)
-        assertEquals(6, published.last().items.size, "the late answer never overwrites the newer one")
-        assertTrue(published.none { !it.busy && it.items.size == 4 })
+        val p = pager()
+        p.refresh(FeedFilter())
+        delay(80)
+        val n = requests.size
+        p.more()
+        assertEquals(n, requests.size, "no request for Load more while the refresh runs")
+        p.idle()
+        assertEquals(4, p.state.value.items.size)
+        assertEquals(FeedFilter(), p.state.value.filter)
+        assertNull(p.state.value.error)
     }
 
     @Test
-    fun `a failed request keeps the list and says why`() = runBlocking {
-        val pager = FeedPager(api)
-        val p1 = pager.refresh(state(), FeedFilter()) { }!!
+    fun `overlapping refreshes - the second cancels the first and its failure rolls back to the last success`() = runBlocking<Unit> {
+        val p = pager()
+        p.refresh(FeedFilter())
+        p.idle()
+        val good = p.state.value
+        slowFirst = true
+        p.refresh(FeedFilter(hideWatched = true)) // slow, superseded
+        delay(80)
+        slowFirst = false
         reply = 500 to """{"error":"Something went wrong talking to YouTube."}"""
-        val failed = pager.more(p1) { }!!
-        assertEquals(p1.items, failed.items)
-        assertEquals(p1.next, failed.next, "load more can be tried again")
-        assertEquals("Something went wrong talking to YouTube.", failed.error)
-        assertFalse(failed.busy)
-        val refused = pager.refresh(p1, FeedFilter(hideShorts = true)) { }!!
-        assertEquals(p1.filter, refused.filter, "the chips go back to what the list shows")
-        assertEquals(p1.items, refused.items)
-        reply = 400 to """{"error":"bad before"}"""
-        assertEquals("bad before", assertFailsWith<ApiException> { api.feed(FeedFilter(), "x") }.message)
+        p.refresh(FeedFilter(hideShorts = true)) // fails
+        p.idle()
+        delay(400) // the slow first answer would arrive now if it were not cancelled
+        val s = p.state.value
+        assertEquals(good.filter, s.filter, "the chips go back to what the list shows")
+        assertEquals(good.items, s.items)
+        assertEquals(good.next, s.next)
+        assertFalse(s.busy)
+        assertEquals("Something went wrong talking to YouTube.", s.error?.message)
+        reply = null
+        p.retry() // retries the failed request
+        p.idle()
+        assertEquals(FeedFilter(hideShorts = true), p.state.value.filter)
+        assertNull(p.state.value.error)
+        assertEquals(6, p.state.value.items.size)
+    }
+
+    @Test
+    fun `a failed load more keeps the list and cursor, carries auth errors, and retry works`() = runBlocking<Unit> {
+        val p = pager()
+        p.refresh(FeedFilter())
+        p.idle()
+        val before = p.state.value
+        reply = 401 to """{"error":"unauthorized"}"""
+        p.more()
+        p.idle()
+        assertEquals(before.items, p.state.value.items)
+        assertEquals(before.next, p.state.value.next)
+        assertTrue(p.state.value.error is AuthException, "the screen offers Open Settings for this")
+        reply = null
+        p.retry()
+        p.idle()
+        assertEquals(8, p.state.value.items.size)
+        assertNull(p.state.value.error)
+    }
+
+    @Test
+    fun `toggles are saved only after the refresh succeeded, and the server's answer is remembered`() = runBlocking<Unit> {
+        val p = pager()
+        reply = 500 to """{"error":"x"}"""
+        p.refresh(FeedFilter(hideShorts = true))
+        p.idle()
+        reply = null
+        assertTrue(requests.none { it.startsWith("POST /api/prefs") }, "nothing saved for a refresh that failed")
+        p.refresh(FeedFilter(hideShorts = true, hideLive = true))
+        p.idle()
+        assertEquals(1, requests.count { it.startsWith("POST /api/prefs") })
+        assertEquals("hideWatched=0&shorts=hide&live=hide", bodies.last())
+        p.refresh(FeedFilter(channel = "UCaaaaaaaaaaaaaaaaaaaaaa", hideShorts = true, hideLive = true))
+        p.idle()
+        assertEquals(1, requests.count { it.startsWith("POST /api/prefs") }, "a channel change is not a saved preference")
+    }
+
+    @Test
+    fun `a failed save is reported and retried on the next change`() = runBlocking<Unit> {
+        val p = pager()
+        reply = null
+        p.refresh(FeedFilter(hideShorts = true))
+        p.idle()
+        assertNull(p.state.value.prefsError)
+        failPrefs = true
+        p.refresh(FeedFilter(hideShorts = true, hideLive = true))
+        p.idle()
+        assertTrue(p.state.value.prefsError!!.contains("Couldn't save"), p.state.value.prefsError)
+        assertEquals(6, p.state.value.items.size, "the filter still works")
+        failPrefs = false
+        p.refresh(FeedFilter(hideShorts = true, hideLive = true, hideWatched = true))
+        p.idle()
+        assertNull(p.state.value.prefsError)
+    }
+
+    @Test
+    fun `the home holder keeps the list across leaving and entering, and reloads only when stale or the connection changed`() = runBlocking<Unit> {
+        var clock = 0L
+        val holder = HomeFeed(api, scope, staleAfterMs = 1000, now = { clock })
+        holder.enter("a")
+        holder.idle()
+        val first = holder.state.value as HomeState.Ready
+        first.pager.refresh(FeedFilter(channel = "UCaaaaaaaaaaaaaaaaaaaaaa"))
+        first.pager.idle()
+        val homes = requests.count { it == "GET /api/home" }
+        holder.enter("a") // Back from a video
+        holder.idle()
+        assertEquals(homes, requests.count { it == "GET /api/home" }, "no reload while fresh")
+        assertEquals("UCaaaaaaaaaaaaaaaaaaaaaa", ((holder.state.value as HomeState.Ready).pager.state.value.filter.channel))
+        clock = 5000
+        holder.enter("a")
+        holder.idle()
+        assertEquals(homes + 1, requests.count { it == "GET /api/home" }, "stale: refreshed in the background")
+        assertTrue(holder.state.value is HomeState.Ready, "never back to a spinner")
+        assertEquals(first.pager, (holder.state.value as HomeState.Ready).pager, "the user's filters and pages are kept")
+        holder.enter("b") // server or token changed
+        holder.idle()
+        assertNotEquals(first.pager, (holder.state.value as HomeState.Ready).pager)
+        reply = 401 to """{"error":"unauthorized"}"""
+        holder.retry()
+        holder.idle()
+        assertTrue((holder.state.value as HomeState.Error).error is AuthException)
     }
 }

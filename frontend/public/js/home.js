@@ -3,7 +3,36 @@ import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 const form = { "content-type": "application/x-www-form-urlencoded" };
 const box = { hideWatched: "#f-watched", shorts: "#f-shorts", live: "#f-live" };
-let next, seq = 0;
+
+/**
+ * Feed paging. Only the latest request may paint (quick toggling cannot interleave), Load more does nothing while a
+ * request runs or without a cursor, and a failed filter change drops the old cursor (it belongs to other filters).
+ * fetchPage(before) resolves {items, next}; paint(state) draws; both are injected so the tests can drive it.
+ */
+export function feedController({ fetchPage, paint, next }) {
+  let seq = 0, busy = false;
+  return {
+    get next() { return next; },
+    async load(append) {
+      if (append && (busy || !next)) return;
+      const mine = ++seq;
+      busy = true;
+      paint({ busy: true, append, next });
+      try {
+        const page = await fetchPage(append ? next : undefined);
+        if (mine !== seq) return;
+        next = page.next;
+        paint({ busy: false, append, items: page.items, next });
+      } catch (err) {
+        if (mine !== seq) return;
+        if (!append) next = undefined;
+        paint({ busy: false, append, error: err.message || "Failed", next });
+      } finally {
+        if (mine === seq) busy = false;
+      }
+    },
+  };
+}
 
 // The query for the feed as the filter bar shows it (explicit, so a stale saved preference can never disagree with the screen).
 const query = () => new URLSearchParams({
@@ -21,30 +50,28 @@ function addCards(items) {
   markWatched();
 }
 
-function show(items, more, append) {
+// aria-disabled, not disabled: the button keeps keyboard focus while it works.
+function paint({ busy, append, items, next, error }) {
+  const more = $("#more");
+  more.setAttribute("aria-disabled", busy);
+  $("#feed-err").textContent = error || "";
+  $("#feed-err").hidden = !error;
+  if (!busy) more.hidden = !next;
+  if (!items) return;
   if (!append) $("#feed-grid").replaceChildren();
+  const before = $("#feed-grid").childElementCount;
   addCards(items);
-  next = more;
-  $("#more").hidden = !more;
-  $("#feed-msg").hidden = !!$("#feed-grid").childElementCount;
-  $("#feed-msg").textContent = $("#feed-msg").hidden ? "" : "Nothing matches these filters.";
+  const msg = $("#feed-msg");
+  msg.textContent = !$("#feed-grid").childElementCount ? "Nothing matches these filters." : append ? `${$("#feed-grid").childElementCount - before} more videos loaded.` : "";
+  msg.hidden = !msg.textContent;
 }
 
-// Fetches a page (the first, or the one after `next`); only the latest request may paint, so quick toggling cannot interleave.
-async function load(append) {
-  const mine = ++seq, q = query(), more = $("#more");
-  if (append) q.set("before", next);
-  more.disabled = true;
-  try {
-    const page = await api(`/api/feed?${q}`);
-    if (mine === seq) show(page.items, page.next, append);
-  } catch (err) {
-    if (mine === seq) { $("#feed-msg").textContent = err.message || "Failed"; $("#feed-msg").hidden = false; }
-  }
-  if (mine === seq) more.disabled = false;
-}
+let saving = Promise.resolve();
+// Saved for the next visit and for the other client, one request after another so the last change wins; a failure
+// leaves the filter on screen working for this visit.
+const save = (body) => (saving = saving.then(() => api("/api/prefs", { method: "POST", headers: form, body: new URLSearchParams(body) }).catch(() => {})));
 
-run(async () => {
+if (document.getElementById("home")) run(async () => {
   setTitle("Home");
   const { subs, feed, next: more, prefs, continue: resume } = await api("/api/home");
   if (!subs.length && !resume.length) {
@@ -55,7 +82,8 @@ run(async () => {
   $("#cont").hidden = !resume.length;
   for (const h of resume) $("#cont-grid").append(historyCard(h, `${formatSeconds(h.position)} watched`));
   for (const [k, sel] of Object.entries(box)) $(sel).checked = prefs[k] === "hide" || prefs[k] === true;
-  show(feed, more, false);
+  const feedCtl = feedController({ fetchPage: (before) => { const q = query(); if (before) q.set("before", before); return api(`/api/feed?${q}`); }, paint, next: more });
+  paint({ busy: false, append: false, items: feed, next: more });
   for (const s of subs) {
     const li = clone("t-sub");
     const a = $("a", li);
@@ -67,14 +95,13 @@ run(async () => {
     o.textContent = s.title;
     $("#f-channel").append(o);
   }
-  $("#f-channel").addEventListener("change", () => load(false));
+  $("#f-channel").addEventListener("change", () => feedCtl.load(false));
   for (const [k, sel] of Object.entries(box)) {
     $(sel).addEventListener("change", (e) => {
       const on = e.target.checked;
-      load(false);
-      // Saved for the next visit and for the other client; a failure leaves the filter on screen working for this visit.
-      api("/api/prefs", { method: "POST", headers: form, body: new URLSearchParams({ [k]: k === "hideWatched" ? +on : on ? "hide" : "show" }) }).catch(() => {});
+      feedCtl.load(false);
+      save({ [k]: k === "hideWatched" ? +on : on ? "hide" : "show" });
     });
   }
-  $("#more").addEventListener("click", () => load(true));
+  $("#more").addEventListener("click", () => feedCtl.load(true));
 });

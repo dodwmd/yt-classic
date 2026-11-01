@@ -684,6 +684,9 @@ test("feed: /api/feed pages through the subscriptions' videos, /api/home filters
     assert.deepEqual(JSON.parse((await get("/api/prefs")).body), { hideWatched: true, shorts: "show", live: "hide" }, "a refused update changes nothing");
     assert.equal((await get("/api/prefs", { method: "POST", headers: { ...FORM, origin: "http://evil.example" }, body: "shorts=hide" })).status, 403);
     assert.equal((await get("/api/prefs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ shorts: "hide" }) })).status, 200);
+    const bools = await get("/api/prefs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hideWatched: false, shorts: true, live: false }) });
+    assert.deepEqual(JSON.parse(bools.body), { hideWatched: false, shorts: "hide", live: "show" });
+    assert.match(JSON.parse((await get("/api/prefs", { method: "POST", headers: FORM, body: "live=sometimes" })).body).error, /show.*hide/);
     assert.equal((await get("/api/prefs", { method: "DELETE" })).status, 405);
   } finally {
     await unsubscribeTv();

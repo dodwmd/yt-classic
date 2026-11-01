@@ -136,3 +136,17 @@ test("RSS: /shorts/ links mark an entry as a Short", () => {
   const items = parseFeed(`<feed><yt:channelId>${ch("a")}</yt:channelId>${entry("AAAAAAAAAAA", "https://www.youtube.com/shorts/AAAAAAAAAAA")}${entry("BBBBBBBBBBB", "https://www.youtube.com/watch?v=BBBBBBBBBBB")}</feed>`);
   assert.deepEqual(items.map((i) => i.short), [true, undefined]);
 });
+
+test("next is only offered when something behind it passes the filters", async () => {
+  const all = mergeFeeds([Array.from({ length: 10 }, (_, i) => item(i + 1))], 400);
+  const watched = all.slice(5).map((i) => i.id); // everything after the first five is hidden
+  const f = { ...none, hideWatched: true };
+  const p = await feedPage(deps(all, {}, watched), f, 5, null);
+  assert.equal(p.items.length, 5);
+  assert.equal(p.next, undefined, "the tail is all filtered: no Load more");
+  const q = await feedPage(deps(all, {}, watched.slice(1)), f, 5, null);
+  assert.ok(q.next, "one visible item remains behind the page");
+  assert.deepEqual((await feedPage(deps(all, {}, watched.slice(1)), f, 5, decodeCursor(q.next!))).items.map((i) => i.id), [all[5].id]);
+  assert.equal((await feedPage(deps(all), none, 10, null)).next, undefined, "an exactly full last page has no next");
+  assert.ok((await feedPage(deps(all), none, 9, null)).next);
+});

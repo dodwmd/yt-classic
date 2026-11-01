@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FACTS_BATCH, videoFacts } from "./api.ts";
+import { FACTS_BACKOFF_MS, FACTS_BATCH, FACTS_TTL, MAX_FACT_CALLS_PER_HOUR, SHORT_FACTS_TTL, resetFactsLimits, videoFacts } from "./api.ts";
 import { clearCache } from "../cache.ts";
 import { closeDb } from "../db.ts";
 
@@ -73,6 +73,60 @@ test("durations: an API failure rejects and is not cached", async () => {
   await assert.rejects(videoFacts(ids("X", 3)));
   globalThis.fetch = f;
   calls = [];
+  resetFactsLimits(); // the minute of back-off is tested below
   assert.equal((await videoFacts(ids("X", 3))).size, 3);
   assert.equal(calls.length, 1);
+});
+
+test("durations: after a failure no call is made for a minute, then lookups resume", async () => {
+  resetFactsLimits();
+  const f = globalThis.fetch;
+  let failing = 0;
+  globalThis.fetch = (async () => (failing++, new Response("{}", { status: 500 }))) as typeof fetch;
+  await assert.rejects(videoFacts(ids("Y", 3)));
+  await assert.rejects(videoFacts(ids("Z", 3)), /paused/);
+  await assert.rejects(videoFacts(ids("Y", 3)), /paused/);
+  assert.equal(failing, 1, "the outage cost one call, not one per request");
+  globalThis.fetch = f;
+  calls = [];
+  const realNow = Date.now;
+  Date.now = () => realNow() + FACTS_BACKOFF_MS + 1;
+  try {
+    assert.equal((await videoFacts(ids("Y", 3))).size, 3);
+    assert.equal(calls.length, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("durations: deleted and duration-less entries are looked up again after the short TTL, real durations after a week", async () => {
+  resetFactsLimits();
+  const real = ["R0000000001"], odd = [GONE];
+  await videoFacts([...real, ...odd]);
+  calls = [];
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + SHORT_FACTS_TTL - 60_000;
+    await videoFacts([...real, ...odd]);
+    assert.equal(calls.length, 0, "still cached");
+    Date.now = () => realNow() + SHORT_FACTS_TTL + 60_000;
+    await videoFacts([...real, ...odd]);
+    assert.deepEqual(calls.map((c) => c.sort()), [[...odd].sort()], "only the unknown-ish ones are asked again");
+    calls = [];
+    Date.now = () => realNow() + FACTS_TTL + 60_000;
+    await videoFacts(real);
+    assert.equal(calls.length, 1);
+  } finally {
+    Date.now = realNow;
+  }
+});
+
+test("durations: at most MAX_FACT_CALLS_PER_HOUR Data API calls an hour", async () => {
+  resetFactsLimits();
+  calls = [];
+  for (let i = 0; i < MAX_FACT_CALLS_PER_HOUR; i++) await videoFacts([`Q${String(i).padStart(10, "0")}`]);
+  assert.equal(calls.length, MAX_FACT_CALLS_PER_HOUR);
+  await assert.rejects(videoFacts(["Q9999999999"]), /limit/);
+  assert.equal(calls.length, MAX_FACT_CALLS_PER_HOUR);
+  assert.equal((await videoFacts(["Q0000000000"])).size, 1, "known videos never need a call");
 });

@@ -126,7 +126,7 @@ async function readProgress(req: IncomingMessage): Promise<{ id: string; positio
   };
 }
 
-/** Small form or JSON bodies (string/number values only); null when too large. */
+/** Small form or JSON bodies (string/number/boolean values only); null when too large. */
 async function readParams(req: IncomingMessage): Promise<Record<string, string> | null> {
   const raw = await readText(req);
   if (raw === null) return null;
@@ -138,7 +138,7 @@ async function readParams(req: IncomingMessage): Promise<Record<string, string> 
     } catch {
       o = undefined;
     }
-    for (const [k, v] of Object.entries(o && typeof o === "object" ? o : {})) if (typeof v === "string" || typeof v === "number") out[k] = String(v);
+    for (const [k, v] of Object.entries(o && typeof o === "object" ? o : {})) if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = String(v);
   } else {
     for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
   }

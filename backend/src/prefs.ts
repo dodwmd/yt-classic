@@ -30,7 +30,8 @@ export function getPrefs(): FeedPrefs {
 
 /** Normalises user input: booleans may be "1"/"0"/"true"/"false". Returns null for anything else. */
 function norm(key: (typeof KEYS)[number], v: string): string | null {
-  const s = key === "hideWatched" ? (v === "true" ? "1" : v === "false" ? "0" : v) : v;
+  // JSON booleans arrive as "true"/"false": for hideWatched that is on/off, for shorts and live true means hide.
+  const s = v !== "true" && v !== "false" ? v : key === "hideWatched" ? (v === "true" ? "1" : "0") : v === "true" ? "hide" : "show";
   return VALID[key](s) ? s : null;
 }
 
@@ -41,7 +42,7 @@ export function parsePrefs(input: Record<string, string>): { error: string } | {
     if (!(KEYS as readonly string[]).includes(k)) return { error: `unknown preference: ${k.slice(0, 40)}` };
     const key = k as (typeof KEYS)[number];
     const n = norm(key, v);
-    if (n === null) return { error: `bad value for ${key}` };
+    if (n === null) return { error: `bad value for ${key}: use ${key === "hideWatched" ? '"1" or "0" (or true/false)' : '"show" or "hide" (or false/true)'}` };
     update[key] = n;
   }
   if (!Object.keys(update).length) return { error: "nothing to change" };

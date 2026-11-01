@@ -382,12 +382,27 @@ export interface VideoFacts {
 }
 
 export const FACTS_BATCH = 50; // videos.list takes up to 50 ids per call, 1 quota unit
-const FACTS_TTL = 7 * 24 * 3600_000;
-const LIVE_FACTS_TTL = 10 * 60_000; // a stream's state changes within minutes or hours; a finished video's never does
+export const FACTS_TTL = 7 * 24 * 3600_000;
+/** Live or upcoming, and also deleted/private or duration-less entries: these change (or may be a transient miss), so they are looked up again soon. */
+export const SHORT_FACTS_TTL = 30 * 60_000;
+export const LIVE_FACTS_TTL = 10 * 60_000;
+export const FACTS_BACKOFF_MS = 60_000; // after a failed lookup, no new call for this long
+export const MAX_FACT_CALLS_PER_HOUR = 60; // Data API units spent on feed filters, globally
+
+let backoffUntil = 0;
+let factCalls: number[] = [];
+/** Test seam. */
+export function resetFactsLimits(): void {
+  backoffUntil = 0;
+  factCalls = [];
+}
+
+const factsTtl = (f: VideoFacts) => (f.live ? LIVE_FACTS_TTL : f.gone || f.duration === 0 ? SHORT_FACTS_TTL : FACTS_TTL);
 
 /**
  * Durations and live state for many videos. One quota unit per 50 videos that are not already known; each video's
- * facts are cached (and persisted in SQLite) under its own id, so a video costs at most one lookup per week.
+ * facts are cached (and persisted in SQLite) under its own id. A failed lookup is not retried for a minute, and
+ * at most MAX_FACT_CALLS_PER_HOUR calls are made an hour; both reject, which callers treat as "unknown".
  */
 export function videoFacts(ids: string[]): Promise<Map<string, VideoFacts>> {
   const unique = [...new Set(ids)];
@@ -397,8 +412,19 @@ export function videoFacts(ids: string[]): Promise<Map<string, VideoFacts>> {
     await Promise.resolve(); // let every cache miss register first
     const out = new Map<string, VideoFacts>();
     for (let i = 0; i < missing.length; i += FACTS_BATCH) {
+      const now = Date.now();
+      if (now < backoffUntil) throw new Error("video lookups paused after a failure");
+      factCalls = factCalls.filter((t) => t > now - 3_600_000);
+      if (factCalls.length >= MAX_FACT_CALLS_PER_HOUR) throw new Error("video lookup limit reached for this hour");
+      factCalls.push(now);
       const chunk = missing.slice(i, i + FACTS_BATCH);
-      const data = await call("videos", { part: "contentDetails,snippet", id: chunk.join(","), fields: "items(id,contentDetails/duration,snippet/liveBroadcastContent)" }); // 1 unit
+      let data;
+      try {
+        data = await call("videos", { part: "contentDetails,snippet", id: chunk.join(","), fields: "items(id,contentDetails/duration,snippet/liveBroadcastContent)" }); // 1 unit
+      } catch (e) {
+        backoffUntil = Date.now() + FACTS_BACKOFF_MS;
+        throw e;
+      }
       for (const v of data.items ?? []) {
         const live = v.snippet?.liveBroadcastContent === "live" || v.snippet?.liveBroadcastContent === "upcoming";
         out.set(v.id, { duration: live ? 0 : isoSeconds(v.contentDetails?.duration), live });
@@ -407,7 +433,7 @@ export function videoFacts(ids: string[]): Promise<Map<string, VideoFacts>> {
     return out;
   })());
   const entries = unique.map((id) =>
-    cached<VideoFacts>(`facts:${id}`, (f) => (f.live ? LIVE_FACTS_TTL : FACTS_TTL), async () => {
+    cached<VideoFacts>(`facts:${id}`, factsTtl, async () => {
       missing.push(id);
       return (await load()).get(id) ?? { duration: 0, live: false, gone: true };
     }, true).then((f) => [id, f] as const),

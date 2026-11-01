@@ -63,7 +63,7 @@ export function parseFilter(q: URLSearchParams, prefs: FeedPrefs): FeedFilter | 
 /**
  * One page of the feed after `cursor`: walks the sorted feed in chunks, filtering each (duration/live lookups are batched
  * and cached, watched state is one query per chunk), until `limit` items are collected or the feed ends.
- * `next` is set when candidates remain after the last item returned.
+ * `next` is set only when at least one more item passes the filters (the walk looks one item ahead).
  */
 export async function feedPage(d: FeedDeps, f: FeedFilter, limit: number, cursor: { t: number; id: string } | null): Promise<{ items: FeedEntry[]; next?: string }> {
   let pool = d.all;
@@ -76,7 +76,8 @@ export async function feedPage(d: FeedDeps, f: FeedFilter, limit: number, cursor
   }
   const needFacts = f.shorts === "hide" || f.live === "hide";
   const items: FeedEntry[] = [];
-  while (at < pool.length && items.length < limit) {
+  // One item more than asked for: `next` is only offered when something is really behind this page.
+  while (at < pool.length && items.length <= limit) {
     const chunk = pool.slice(at, at + CHUNK);
     let facts = new Map<string, VideoFacts>();
     if (needFacts) {
@@ -97,8 +98,9 @@ export async function feedPage(d: FeedDeps, f: FeedFilter, limit: number, cursor
       if (f.shorts === "hide" && short) continue;
       if (f.live === "hide" && k?.live) continue;
       items.push(entry);
-      if (items.length === limit) break;
+      if (items.length > limit) break;
     }
   }
-  return { items, next: items.length && at < pool.length ? encodeCursor(items[items.length - 1]) : undefined };
+  const page = items.slice(0, limit);
+  return { items: page, next: items.length > limit ? encodeCursor(page[page.length - 1]) : undefined };
 }

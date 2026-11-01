@@ -339,19 +339,29 @@ feeds are (about 15 videos per channel), so 400 is reached with roughly 27 or mo
 - `GET /api/feed?limit=&before=<cursor>&channel=<UC id>&hideWatched=0|1&shorts=show|hide&live=show|hide` returns
   `{items, next}`; `limit` is 1 to 100 (default 60). The cursor is opaque (the publish time and id of the last item); items are
   ordered by time and then id, so equal timestamps never skip or repeat an item, and a cursor stays valid when the
-  feed refreshes. A filter that hides items makes a page look further ahead until `limit` items are found, so a page
-  can come back short only at the very end. An unknown or malformed parameter is a 400.
+  feed refreshes. A filter that hides items makes a page look further ahead until `limit` items are found (and one
+  item beyond, so `next` is only present when something visible is really behind the page); a page can only come
+  back short at the very end. An unknown or malformed parameter is a 400.
 - A filter left out of the query falls back to the saved preference (below); nothing is hidden until you choose to.
+  This includes `GET /api/home`: it follows the saved preferences, so an older client that knows nothing about
+  filters gets a feed already filtered by whatever was saved from the web or Android UI.
   Both clients always send the filters they show, so the screen and the server cannot disagree.
-- `GET /api/prefs` and `POST /api/prefs` (same-origin, form or JSON with string values) keep `hideWatched` (`0`/`1`),
+- `GET /api/prefs` and `POST /api/prefs` (same-origin, form or JSON; values are strings, and JSON booleans are accepted:
+  for `hideWatched` true means on, for `shorts` and `live` true means `hide`) keep `hideWatched` (`0`/`1`),
   `shorts` and `live` (`show`/`hide`) in the SQLite `meta` table (`feed.hideWatched`, `feed.shorts`, `feed.live`) so the
   web UI and the Android app share them. Only these keys are accepted, partial updates are fine, any bad key or value
-  is a 400 and changes nothing. The channel filter is per visit and not saved.
+  is a 400 (the message names the accepted values) and changes nothing. The channel filter is per visit and not saved.
+  The preferences are one set for the whole server, not per device or person: everyone who can reach the server
+  shares them (and can change them) unless you set `ACCESS_TOKEN`.
 - **Shorts and live.** RSS carries neither duration nor live state, so a Shorts/live filter looks them up with the Data
   API `videos.list` (**1 quota unit per 50 videos**, only for videos not seen before). Results are cached per video id in
   SQLite for a week (10 minutes for live and upcoming videos, whose state changes), so a cold 400-item feed costs at most 8
-  units once and normally 0. A Short is a video of 60 seconds or less, or one the feed links as `/shorts/`. Live
-  and upcoming videos report a duration of 0 and are never counted as Shorts. Videos the API does not return (deleted,
+  units once and normally 0. Deleted/private videos and ones without a duration are looked up again after 30 minutes.
+  After a failed lookup no call is made for a minute (so an outage costs one call, not one per request), and at most 60
+  such calls are made an hour; past that, filters simply do not apply to videos not yet looked up. A Short is
+  a video of 60 seconds or less, or one the feed links as `/shorts/`: this is a heuristic, since YouTube now allows
+  longer Shorts and some short videos are not Shorts. "Live" covers live now **and scheduled (upcoming)** streams; they
+  report a duration of 0 and are never counted as Shorts. Videos the API does not return (deleted,
   private) and any failed lookup are shown rather than hidden. With neither filter on, no lookups are made. Items that
   were looked up carry `durationSeconds` and `live`.
 - **Hide watched** hides videos you watched to the end (a single SQL query per 50 candidates).

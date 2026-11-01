@@ -34,3 +34,12 @@ test("prefs: whitelist and validation", () => {
   }
   assert.ok("update" in parsePrefs({ live: "hide", hideWatched: "0" }));
 });
+
+test("prefs: JSON booleans map sensibly and a bad value names what is accepted", () => {
+  const p = parsePrefs({ hideWatched: "true", shorts: "true", live: "false" });
+  assert.ok("update" in p);
+  assert.deepEqual(p.update, { hideWatched: "1", shorts: "hide", live: "show" });
+  const bad = parsePrefs({ shorts: "maybe" });
+  assert.ok("error" in bad);
+  assert.match(bad.error, /show.*hide/);
+});

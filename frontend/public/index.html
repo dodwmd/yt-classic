@@ -34,9 +34,10 @@
         <label><input type="checkbox" id="f-shorts"> Hide Shorts</label>
         <label><input type="checkbox" id="f-live"> Hide live</label>
       </div>
+      <p id="feed-err" role="alert" hidden></p>
       <p id="feed-msg" role="status" hidden></p>
       <div class="grid" id="feed-grid"></div>
-      <p><button type="button" id="more" hidden>Load more</button></p>
+      <p><button type="button" id="more" aria-disabled="false" hidden>Load more</button></p>
     </div>
     <div id="subs">
       <h3>Subscriptions</h3>
