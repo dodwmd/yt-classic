@@ -1,6 +1,11 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { getDb, pingDb, stmt } from "./db.ts";
+import { classifyText, errorText } from "./errors.ts";
+import { observeResolve, streamStats } from "./metrics.ts";
+import { cacheStats } from "./cache.ts";
+import { dbBytes } from "./scrape.ts";
+import { fallbackRemaining, unitsToday } from "./quota.ts";
 
 const run = promisify(execFile);
 
@@ -29,15 +34,13 @@ export function classifyFailure(err: unknown): FailReason {
   const e = err as { code?: unknown; killed?: boolean; message?: string; stderr?: string };
   if (e?.code === "ENOENT") return "not-installed";
   if (e?.killed) return "timeout";
-  const t = `${e?.stderr ?? ""}\n${e?.message ?? ""}`.toLowerCase();
+  const t = errorText(err).toLowerCase();
   if (t.includes("returned no stream url")) return "no-url";
-  // Keep these patterns in step with scripts/smoke-ytdlp.sh (it separates "YouTube blocked this runner" from a real regression).
-  if (/confirm your age|age.restricted|inappropriate for some users/.test(t)) return "unavailable"; // before bot-check: "Sign in to confirm your age"
-  if (/confirm you.re not a bot/.test(t)) return "bot-check";
-  if (/http error 429|too many requests|rate.?limit/.test(t)) return "rate-limited";
-  if (/video unavailable|private video|has been removed|not available|members.only|live event/.test(t)) return "unavailable";
-  if (/unable to download|timed out|name or service not known|temporary failure|connection (refused|reset)|network is unreachable|getaddrinfo/.test(t)) return "network";
-  return "other";
+  // One classification source (errors.ts); keep its patterns in step with scripts/smoke-ytdlp.sh (it separates
+  // "YouTube blocked this runner" from a real regression).
+  const code = classifyText(t);
+  if (code === null) return "other";
+  return code === "bot-check" || code === "rate-limited" || code === "network" ? code : "unavailable";
 }
 
 function persist(key: string, value: unknown): void {
@@ -65,13 +68,16 @@ function load(): void {
 /** Wraps one real yt-dlp resolve (not cache hits) and records its outcome. Never changes the result or the error. */
 export async function tracked<T>(fn: () => Promise<T>): Promise<T> {
   load();
+  const t0 = performance.now();
   try {
     const r = await fn();
+    observeResolve((performance.now() - t0) / 1000);
     ok++;
     lastOk = { at: Date.now() };
     persist(KEY_OK, lastOk);
     return r;
   } catch (e) {
+    observeResolve((performance.now() - t0) / 1000);
     failed++;
     const reason = classifyFailure(e);
     // A private, removed, age-restricted... video is the viewer's problem, not yt-dlp's: counted and shown as the
@@ -146,6 +152,7 @@ export async function statusReport() {
   load();
   const [yt, ff] = await Promise.all([ytdlpVersion(), ffmpegVersion()]);
   const db = cacheStatus();
+  const cs = cacheStats();
   let h = health();
   if (h === "ok" && (yt === null || !db.ok)) h = "degraded"; // can't run yt-dlp, or storage is broken
   return {
@@ -161,7 +168,9 @@ export async function statusReport() {
     ffmpeg: { present: ff !== null, version: ff },
     node: process.version,
     uptimeSeconds: Math.round((Date.now() - started) / 1000),
-    cache: db,
+    cache: { ...db, hits: cs.hits, misses: cs.misses, dbBytes: dbBytes() },
+    streams: streamStats(),
+    dataApi: { unitsToday: unitsToday(), searchFallbackRemaining: fallbackRemaining() },
   };
 }
 

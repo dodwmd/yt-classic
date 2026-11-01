@@ -7,10 +7,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createApp, resetTvLimiter } from "./app.ts";
 import { clearCache } from "./cache.ts";
-import { getDb } from "./db.ts";
+import { closeDb, getDb } from "./db.ts";
 import { clearHistory } from "./history.ts";
 import { deletePlaylist, listPlaylists, resetLookupLimit, noteLookup, MAX_LOOKUPS_PER_HOUR } from "./playlists.ts";
-import { killChildren } from "./yt/dlp.ts";
+import { clearFailures, killChildren } from "./yt/dlp.ts";
+import { ROUTE_CLASSES, RESOLVE_BUCKETS, STATUS_CLASSES } from "./metrics.ts";
+import { CODES, INFO, type ErrorCode } from "./errors.ts";
 
 const CHANNEL = "UC" + "a".repeat(22);
 const VID = "AAAAAAAAAAA";
@@ -38,7 +40,9 @@ before(async () => {
   process.env.YTDLP_BIN = script(
     "yt-dlp",
     `mode=j; for a in "$@"; do [ "$a" = "-g" ] && mode=g; done
-if [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; echo https://example.invalid/v; echo https://example.invalid/a
+[ "$mode" = g ] && echo x >> "$(dirname "$0")/resolves"
+if [ "$mode" = g ] && [ -n "$FAKE_YTDLP_ERR" ]; then printf '%s\\n' "$FAKE_YTDLP_ERR" >&2; exit 1
+elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; echo https://example.invalid/v; echo https://example.invalid/a
 else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","channel":"Chan","channel_id":"${CHANNEL}","duration":65,"view_count":10}]}'; fi`,
   );
   process.env.FFMPEG_BIN = script("ffmpeg", `echo $$ > "$PIDFILE"; printf xxxx; exec sleep 30`);
@@ -70,11 +74,13 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
       videoCalls++;
       const id = new URL(u).searchParams.get("id");
       if (id === "FAILING0000") return new Response("{}", { status: 500 });
+      if (id === "QUOTA000000") return new Response(JSON.stringify({ error: { code: 403, message: "quota key=SECRET", errors: [{ reason: "quotaExceeded" }] } }), { status: 403 });
       if (id === "NOTFOUND000") return new Response(JSON.stringify({ items: [] }), { status: 200 });
       const item = {
         id, snippet: { title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: "https://i.ytimg.com/server.jpg" } } },
-        contentDetails: { duration: "PT10M" }, statistics: {},
+        contentDetails: { duration: "PT10M", ...(id === "AGEVIDEO000" ? { contentRating: { ytRating: "ytAgeRestricted" } } : {}) }, statistics: {},
       };
+      if (id === "LIVEVIDEO00") item.snippet = { ...item.snippet, liveBroadcastContent: "live" } as typeof item.snippet;
       return new Response(JSON.stringify({ items: [item] }), { status: 200 });
     }
     return new Response("{}", { status: 404 });
@@ -102,6 +108,8 @@ beforeEach(() => {
   resetTvLimiter();
   rmSync(process.env.PIDFILE!, { force: true });
   delete process.env.FAKE_RESOLVE_SLEEP;
+  delete process.env.FAKE_YTDLP_ERR;
+  clearFailures();
   delete process.env.ALLOWED_HOSTS;
   process.env.FFMPEG_BIN = join(tmp, "ffmpeg");
 });
@@ -691,5 +699,261 @@ test("feed: /api/feed pages through the subscriptions' videos, /api/home filters
   } finally {
     await unsubscribeTv();
     await get("/api/prefs", { method: "POST", headers: FORM, body: "hideWatched=0&shorts=show&live=show" });
+  }
+});
+
+
+// --- classified errors ---
+
+const errBody = (r: { body: string }) => JSON.parse(r.body) as { error: string; code: string; retryable: boolean };
+
+const STDERR_CASES: Array<[ErrorCode, string]> = [
+  ["age-restricted", "ERROR: [youtube] SECRETVID01: Sign in to confirm your age. This video may be inappropriate for some users."],
+  ["region-blocked", "ERROR: [youtube] SECRETVID01: The uploader has not made this video available in your country"],
+  ["private", "ERROR: [youtube] SECRETVID01: Private video. Sign in if you\u2019ve been granted access to this video"],
+  ["removed", "ERROR: [youtube] SECRETVID01: Video unavailable. This video has been removed by the uploader"],
+  ["members-only", "ERROR: [youtube] SECRETVID01: Join this channel to get access to members-only content like this video"],
+  ["upcoming", "ERROR: [youtube] SECRETVID01: This live event will begin in 3 hours."],
+  ["bot-check", "ERROR: [youtube] SECRETVID01: Sign in to confirm you\u2019re not a bot. Use --cookies-from-browser or --cookies"],
+  ["rate-limited", "ERROR: [youtube] SECRETVID01: Unable to download API page: HTTP Error 429: Too Many Requests"],
+  ["network", "ERROR: [youtube] SECRETVID01: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>"],
+  ["unknown", "ERROR: [youtube] SECRETVID01: something nobody has seen before at /home/user/.cache/yt-dlp"],
+];
+
+test("a failed resolve before the stream starts is JSON with the right status, code and retryable flag, and leaks nothing", async () => {
+  for (const [code, stderr] of STDERR_CASES) {
+    clearCache();
+    clearFailures();
+    process.env.FAKE_YTDLP_ERR = stderr;
+    const r = await get(`/stream/${VID}`);
+    assert.equal(r.status, INFO[code].status, code);
+    assert.deepEqual(errBody(r), { error: INFO[code].message, code, retryable: INFO[code].retryable }, code);
+    for (const leak of ["SECRETVID01", "youtube", "/home", "yt-dlp", "cookies", VID, "example.invalid"]) assert.ok(!r.body.includes(leak), `${code} leaked ${leak}`);
+  }
+});
+
+test("rate-limited and busy carry retry-after; busy is a 503 with code busy", async () => {
+  process.env.FAKE_YTDLP_ERR = "HTTP Error 429: Too Many Requests";
+  const limited = await new Promise<string | string[] | undefined>((resolve) => {
+    request({ host: "127.0.0.1", port, path: `/stream/${VID}` }, (res) => { res.resume(); resolve(res.headers["retry-after"]); }).end();
+  });
+  assert.equal(limited, "60");
+  delete process.env.FAKE_YTDLP_ERR;
+  clearFailures();
+  const open: Array<ReturnType<typeof request>> = [];
+  for (let i = 0; i < 3; i++) {
+    await new Promise<void>((resolve) => {
+      const req = request({ host: "127.0.0.1", port, path: `/stream/${VID}` }, (res) => res.once("data", () => resolve()));
+      req.on("error", () => {});
+      open.push(req);
+      req.end();
+    });
+  }
+  const r = await get(`/stream/${VID}`);
+  assert.equal(r.status, 503);
+  assert.deepEqual(errBody(r), { error: INFO.busy.message, code: "busy", retryable: true });
+  for (const req of open) req.destroy();
+  await sleep(300);
+});
+
+test("a missing ffmpeg is an unknown, retryable 502 as JSON", async () => {
+  process.env.FFMPEG_BIN = join(tmp, "does-not-exist");
+  const r = await get(`/stream/${VID}`);
+  assert.equal(r.status, 502);
+  assert.equal(errBody(r).code, "unknown");
+});
+
+test("Data API failures map: quota is 429 rate-limited, an unknown video is 404 removed, a 500 is a 502", async () => {
+  const quota = await get("/api/video/QUOTA000000");
+  assert.equal(quota.status, 429);
+  assert.equal(errBody(quota).code, "rate-limited");
+  assert.ok(!quota.body.includes("SECRET") && !quota.body.includes("test-key"));
+  const gone = await get("/api/video/NOTFOUND000");
+  assert.equal(gone.status, 404);
+  assert.equal(errBody(gone).code, "removed");
+  assert.equal(typeof JSON.parse(gone.body).error, "string"); // the old field stays
+  const broken = await get("/api/video/FAILING0000");
+  assert.equal(broken.status, 502);
+  assert.equal(errBody(broken).code, "unknown");
+});
+
+test("an unset YT_API_KEY still tells the operator why", async () => {
+  const saved = process.env.YT_API_KEY;
+  delete process.env.YT_API_KEY;
+  try {
+    const r = await get("/api/video/KEYMISSING0");
+    assert.equal(r.status, 502);
+    assert.match(errBody(r).error, /^YT_API_KEY/);
+  } finally {
+    process.env.YT_API_KEY = saved;
+  }
+});
+
+test("/api/video carries a playability hint only when something says the video cannot be played", async () => {
+  const fine = JSON.parse((await get("/api/video/FINEVIDEO00")).body);
+  assert.equal("playable" in fine, false);
+  const live = JSON.parse((await get("/api/video/LIVEVIDEO00")).body);
+  assert.deepEqual([live.playable, live.reason, live.message], [false, "live", INFO.live.message]);
+  const age = JSON.parse((await get("/api/video/AGEVIDEO000")).body);
+  assert.deepEqual([age.playable, age.reason], [false, "age-restricted"]);
+  // A resolve that failed for a final reason is remembered for a while, so the next page load knows.
+  process.env.FAKE_YTDLP_ERR = "ERROR: [youtube] x: Private video. Sign in if you've been granted access to this video";
+  await get(`/api/video/PRIVATE0001`); // prewarm fails in the background
+  await sleep(500);
+  const priv = JSON.parse((await get(`/api/video/PRIVATE0001`)).body);
+  assert.deepEqual([priv.playable, priv.reason], [false, "private"]);
+});
+
+// --- metrics ---
+
+const series = (body: string) => body.split("\n").filter((l) => l && !l.startsWith("#"));
+const value = (body: string, name: string) => Number(series(body).find((l) => l.startsWith(`${name} `))?.slice(name.length + 1) ?? NaN);
+
+test("/api/metrics is Prometheus text with the documented series", async () => {
+  const r = await new Promise<{ status: number; type: string; body: string }>((resolve) => {
+    request({ host: "127.0.0.1", port, path: "/api/metrics" }, (res) => {
+      let body = "";
+      res.on("data", (d) => (body += d));
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, type: String(res.headers["content-type"]), body }));
+    }).end();
+  });
+  assert.equal(r.status, 200);
+  assert.match(r.type, /^text\/plain; version=0\.0\.4/);
+  for (const name of [
+    "ytclassic_streams_active", "ytclassic_streams_started_total", "ytclassic_streams_finished_total", "ytclassic_streams_failed_total",
+    "ytclassic_resolve_seconds_count", "ytclassic_resolve_seconds_sum", "ytclassic_cache_hits_total", "ytclassic_cache_misses_total",
+    "ytclassic_cache_entries", "ytclassic_dataapi_units_today", "ytclassic_search_fallback_remaining", "ytclassic_sqlite_bytes", "ytclassic_uptime_seconds",
+  ]) assert.ok(Number.isFinite(value(r.body, name)), `${name} missing or not a number`);
+  for (const l of series(r.body)) assert.match(l, /^[a-z_]+(\{[a-z_]+="[^"]*"(,[a-z_]+="[^"]*")*\})? [0-9.e+-]+$/, l);
+  assert.ok(r.body.endsWith("\n"));
+  for (const code of CODES) assert.ok(r.body.includes(`ytclassic_errors_total{code="${code}"}`), code);
+  assert.ok(value(r.body, "ytclassic_sqlite_bytes") > 0);
+});
+
+test("metrics count streams, errors, resolves, cache and Data API units", async () => {
+  const m = async () => (await get("/api/metrics")).body;
+  const a = await m();
+  await get(`/api/video/${VID}`); // Data API call (cache miss), prewarm resolve
+  await get(`/api/video/${VID}`); // cache hit
+  process.env.FAKE_YTDLP_ERR = "Private video";
+  clearCache();
+  clearFailures();
+  await get("/stream/FAILMETRIC1"); // its own id: must not join the prewarm resolve still running for VID
+  delete process.env.FAKE_YTDLP_ERR;
+  const b = await m();
+  assert.ok(value(b, "ytclassic_dataapi_units_today") > value(a, "ytclassic_dataapi_units_today"));
+  assert.ok(value(b, "ytclassic_cache_hits_total") > value(a, "ytclassic_cache_hits_total"));
+  assert.ok(value(b, "ytclassic_cache_misses_total") > value(a, "ytclassic_cache_misses_total"));
+  assert.equal(value(b, 'ytclassic_errors_total{code="private"}'), value(a, 'ytclassic_errors_total{code="private"}') + 1);
+  assert.equal(value(b, "ytclassic_streams_failed_total"), value(a, "ytclassic_streams_failed_total") + 1);
+  assert.ok(value(b, "ytclassic_resolve_seconds_count") > value(a, "ytclassic_resolve_seconds_count"));
+  assert.ok(value(b, 'ytclassic_http_requests_total{route="stream",status="4xx"}') >= 1);
+  // A stream that starts and is left counts as started, then finished; active returns to its old value.
+  clearFailures(); // the private-video failure above is remembered for 30 s
+  clearCache();
+  const before = await m();
+  await new Promise<void>((resolve) => {
+    const req = request({ host: "127.0.0.1", port, path: `/stream/${VID}` }, (res) => res.once("data", () => (req.destroy(), resolve())));
+    req.on("error", () => {});
+    req.end();
+  });
+  await sleep(400);
+  const after = await m();
+  assert.equal(value(after, "ytclassic_streams_started_total"), value(before, "ytclassic_streams_started_total") + 1);
+  assert.equal(value(after, "ytclassic_streams_finished_total"), value(before, "ytclassic_streams_finished_total") + 1);
+  assert.equal(value(after, "ytclassic_streams_active"), value(before, "ytclassic_streams_active"));
+});
+
+test("metrics have bounded cardinality: random paths, ids, queries and statuses add no series", async () => {
+  await get("/api/home");
+  const base = series((await get("/api/metrics")).body).length;
+  for (let i = 0; i < 60; i++) {
+    const rnd = "r" + Math.random().toString(36).slice(2, 14).padEnd(12, "0"); // 13 chars: never a valid 11-char video id
+    await get(`/${rnd}`);
+    await get(`/api/${rnd}`);
+    await get(`/api/video/${rnd}`);
+    await get(`/api/channel/${rnd}`);
+    await get(`/stream/${rnd}`);
+    await get(`/static/${rnd}.js?x=${rnd}`);
+    await get(`/api/search?q=${rnd}`);
+  }
+  const body = (await get("/api/metrics")).body;
+  const grown = series(body).length - base;
+  assert.ok(grown <= 12, `series grew by ${grown}`); // new route/status class pairs only, never per path
+  const known = new Set<string>([...ROUTE_CLASSES, ...STATUS_CLASSES, ...CODES, ...RESOLVE_BUCKETS.map(String), "+Inf"]);
+  for (const l of series(body)) for (const m of l.matchAll(/"([^"]*)"/g)) assert.ok(known.has(m[1]), `unexpected label value ${m[1]}`);
+  assert.doesNotMatch(body, /\/api\/|\/stream\/|watch\?v/);
+});
+
+const resolveCalls = () => (existsSync(join(tmp, "resolves")) ? readFileSync(join(tmp, "resolves"), "utf8").split("\n").filter(Boolean).length : 0);
+const metric = async (name: string) => value((await get("/api/metrics")).body, name) || 0;
+
+test("a failed resolve is reused for 30 s per (id, quality, lang): prewarm, stream and probe cost one yt-dlp run", async () => {
+  process.env.FAKE_YTDLP_ERR = "ERROR: [youtube] x: Sign in to confirm you\u2019re not a bot";
+  const id = "NEGCACHE001";
+  const before = resolveCalls();
+  await get(`/api/video/${id}`); // prewarm fails in the background
+  await sleep(400);
+  const s1 = await get(`/stream/${id}`);
+  const p = await get(`/stream/${id}?probe=1`);
+  assert.equal(s1.status, 502);
+  assert.equal(errBody(p).code, "bot-check");
+  assert.equal(resolveCalls(), before + 1, "one run served all three");
+  await get(`/stream/${id}?q=480`); // another quality is its own key
+  assert.equal(resolveCalls(), before + 2);
+  // Successes are never cached negatively: the same id works as soon as yt-dlp does, for a key that did not fail.
+  delete process.env.FAKE_YTDLP_ERR;
+  assert.equal((await get(`/stream/${id}?probe=1&q=360`)).status, 200);
+  assert.equal((await get(`/stream/${id}?probe=1&q=360`)).status, 200);
+  assert.equal(resolveCalls(), before + 3, "a success is cached by the normal cache, one run");
+});
+
+test("the probe answers JSON without a stream slot, ffmpeg or stream counters", async () => {
+  const started = await metric("ytclassic_streams_started_total");
+  const r = await get(`/stream/PROBEOK0001?probe=1`);
+  assert.equal(r.status, 200);
+  assert.deepEqual(JSON.parse(r.body), { ok: true });
+  assert.equal(existsSync(process.env.PIDFILE!), false, "ffmpeg was started by a probe");
+  assert.equal(await metric("ytclassic_streams_started_total"), started);
+  assert.equal(await metric("ytclassic_streams_failed_total"), await metric("ytclassic_streams_failed_total"));
+});
+
+test("a quality miss is not a skippable error and is not remembered as unplayable", async () => {
+  process.env.FAKE_YTDLP_ERR = "ERROR: [youtube] x: Requested format is not available. Use --list-formats for a list of available formats";
+  const r = await get(`/stream/FORMATMISS1`);
+  assert.equal(errBody(r).code, "unknown");
+  delete process.env.FAKE_YTDLP_ERR;
+  await get(`/api/video/FORMATMISS1`);
+  await sleep(300);
+  assert.equal("playable" in JSON.parse((await get(`/api/video/FORMATMISS1?q=360`)).body), false);
+});
+
+test("a request the client abandoned before any answer is not counted as a 2xx", async () => {
+  process.env.FAKE_RESOLVE_SLEEP = "1";
+  const key = 'ytclassic_http_requests_total{route="stream",status="2xx"}';
+  const before = await metric(key);
+  await new Promise<void>((resolve) => {
+    const req = request({ host: "127.0.0.1", port, path: `/stream/ABORTED0001` });
+    req.on("error", () => {});
+    req.end();
+    setTimeout(() => { req.destroy(); resolve(); }, 250);
+  });
+  await sleep(1500);
+  assert.equal(await metric(key), before);
+});
+
+test("an unreachable database leaves sqlite_bytes out of /api/metrics and null in /api/status", async () => {
+  const saved = process.env.DATA_DIR;
+  closeDb();
+  process.env.DATA_DIR = join(tmp, "a-file");
+  writeFileSync(process.env.DATA_DIR, "not a directory");
+  try {
+    const m = (await get("/api/metrics")).body;
+    assert.ok(m.includes("# TYPE ytclassic_sqlite_bytes gauge"));
+    assert.ok(!/^ytclassic_sqlite_bytes /m.test(m), "no sample while unreachable");
+    assert.equal(JSON.parse((await get("/api/status")).body).cache.dbBytes, null);
+  } finally {
+    process.env.DATA_DIR = saved;
+    closeDb();
   }
 });

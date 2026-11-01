@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { logSafe } from "../http.ts";
 import { cached } from "../cache.ts";
-import { envInt } from "../env.ts";
+import { fallbackAllowed } from "../quota.ts";
 import { apiSearch, type SearchPage, type VideoSummary } from "./api.ts";
 import { resolveSlots } from "./dlp.ts";
 
@@ -30,14 +31,7 @@ export function parseSearch(json: any, page: number): SearchPage {
   };
 }
 
-// The Data API fallback costs 100 quota units a search, so cap how often it can be used per day.
-let fallbackDay = "";
-let fallbackUsed = 0;
-function fallbackAllowed(): boolean {
-  const day = new Date().toISOString().slice(0, 10);
-  if (day !== fallbackDay) [fallbackDay, fallbackUsed] = [day, 0];
-  return fallbackUsed++ < envInt("SEARCH_FALLBACK_MAX", 20);
-}
+// The Data API fallback costs 100 quota units a search, so cap how often it can be used per day (quota.ts).
 
 /**
  * Page tokens: "2".."5" are yt-dlp pages; "g:<token>" are Data API page tokens (only produced by the fallback).
@@ -60,7 +54,7 @@ export function search(q: string, pageToken = ""): Promise<SearchPage> {
       );
       return parseSearch(JSON.parse(stdout), page);
     } catch (e) {
-      console.error(`yt-dlp search failed: ${(e as Error).message.split("\n")[0]}`);
+      console.error(`yt-dlp search failed: ${logSafe((e as Error).message.split("\n")[0])}`);
       if (page > 1 || !fallbackAllowed()) throw e;
       return apiPage(q, "");
     }

@@ -1,3 +1,4 @@
+import { logSafe } from "../http.ts";
 import { channelUploads, type VideoDetail } from "./api.ts";
 import { related, type RelatedItem } from "./innertube.ts";
 
@@ -8,7 +9,7 @@ export interface RelatedList {
 
 /** Real related videos; falls back to the channel's uploads (1 quota unit) if that breaks. */
 export async function relatedFor(v: VideoDetail): Promise<RelatedList> {
-  const items = await related(v.id).catch((e) => (console.error(e.message), [] as RelatedItem[]));
+  const items = await related(v.id).catch((e) => (console.error(logSafe(e.message)), [] as RelatedItem[]));
   if (items.length) return { heading: "Related videos", items };
   const ups = await channelUploads(v.channelId, v.id).catch(() => []);
   return {

@@ -11,6 +11,11 @@ export const CACHE_VERSION = 2;
 const PRUNE_EVERY = 200; // writes between pruning passes
 const NEGATIVE_TTL_MS = 60_000;
 
+let hits = 0;
+let misses = 0;
+/** Lookup counters since start (for /api/metrics): a hit is anything served without calling the fetcher. */
+export const cacheStats = () => ({ hits, misses, entries: store.size });
+
 const store = new Map<string, { exp: number; val: unknown; touched?: number }>();
 const pending = new Map<string, Promise<unknown>>();
 
@@ -167,10 +172,12 @@ export function cached<T>(key: string, ttl: number | ((val: T) => number), fn: (
     store.delete(key); // refresh LRU position
     store.set(key, hit);
     if (store.size > MAX_ENTRIES) put(key, hit.val, hit.exp - Date.now(), false);
+    hits++;
     return Promise.resolve(hit.val as T);
   }
   const inflight = pending.get(key);
-  if (inflight) return inflight as Promise<T>;
+  if (inflight) return (hits++, inflight as Promise<T>);
+  misses++;
   const p = (async () => fn())()
     .then((val) => {
       const t = ttlMs ?? (ttl as (v: T) => number)(val);

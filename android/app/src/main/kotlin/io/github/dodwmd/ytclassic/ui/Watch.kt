@@ -14,7 +14,13 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.material3.Button
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
+import io.github.dodwmd.ytclassic.data.shortMessage
+import io.github.dodwmd.ytclassic.data.showPlayer
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -46,7 +52,16 @@ fun WatchScreen(
         val later = rememberLater(api, (listOf(v.id) + r.related.items.map { it.id }).distinct())
         Column(Modifier.fillMaxWidth()) {
             // The player stays pinned at the top; everything else scrolls underneath it.
-            StreamPlayer(v, r.quality, r.qualities, r.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
+            // The server's "can't play" hint never hides the player for good: "Try anyway" mounts it (kept across recomposition).
+            var override by rememberSaveable(v.id) { mutableStateOf(false) }
+            if (showPlayer(r.playable, r.reason, override)) {
+                StreamPlayer(v, r.quality, r.qualities, r.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreen, onFullscreen = onFullscreen)
+            } else {
+                Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
+                    Text(shortMessage(r.message.ifBlank { "This video can't be played." }), color = MaterialTheme.colorScheme.error)
+                    Button(onClick = { override = true }) { Text("Try anyway") }
+                }
+            }
             if (!fullscreen) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {

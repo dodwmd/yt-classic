@@ -1,10 +1,13 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { logSafe } from "../http.ts";
 import { cached } from "../cache.ts";
 import { envInt } from "../env.ts";
 import { limiter } from "../limit.ts";
 import { tracked } from "../status.ts";
+import { INFO, SKIPPABLE, classifyError, classifyText, errorBody, type ErrorCode } from "../errors.ts";
+import { streamEvents } from "../metrics.ts";
 
 const run = promisify(execFile);
 
@@ -52,10 +55,43 @@ export const formatSelector = (q: number, lang: string) => {
   return `${pref(`ba[ext=m4a][language^=${lang}]`)}/${pref("ba[ext=m4a]")}/b[height<=${q}][ext=mp4]/bv*[height<=${q}]+ba/b[height<=${q}]`;
 };
 
+// Videos whose last resolve failed for a reason retrying won't fix; lets /api/video answer "can't play" without yt-dlp.
+const unplayable = new Map<string, { code: ErrorCode; until: number }>();
+export function knownUnplayable(id: string): ErrorCode | undefined {
+  const hit = unplayable.get(id);
+  return hit && hit.until > Date.now() ? hit.code : undefined;
+}
+function noteUnplayable(id: string, err: unknown): void {
+  const code = classifyError(err);
+  if (!SKIPPABLE.has(code)) return;
+  unplayable.delete(id);
+  unplayable.set(id, { code, until: Date.now() + 10 * 60_000 });
+  if (unplayable.size > 200) unplayable.delete(unplayable.keys().next().value!);
+}
+
+// A failed resolve is remembered briefly per (id, quality, lang): the prewarm, the <video> request and the web
+// player's error probe all ask for the same thing, and a failing video (or a bot check) must not be re-asked each time.
+export const FAIL_TTL_MS = 30_000;
+const failures = new Map<string, { until: number; err: unknown }>();
+export function recentFailure(key: string, now = Date.now()): { err: unknown } | undefined {
+  const hit = failures.get(key);
+  if (hit && hit.until <= now) failures.delete(key);
+  return hit && hit.until > now ? hit : undefined;
+}
+export function recordFailure(key: string, err: unknown, now = Date.now()): void {
+  failures.delete(key);
+  failures.set(key, { until: now + FAIL_TTL_MS, err });
+  if (failures.size > 200) failures.delete(failures.keys().next().value!);
+}
+export const clearFailures = () => failures.clear();
+
 /** Direct googlevideo URLs: [video, audio] or a single muxed URL. Bound to this host's IP. */
 export async function resolveUrls(id: string, q: number, lang: string): Promise<string[]> {
   if (!VIDEO_ID.test(id)) throw new Error("bad video id");
-  return cached(`dlp:${id}-${q}-${lang}`, 5 * 60_000, () =>
+  const key = `${id}-${q}-${lang}`;
+  const failed = recentFailure(key);
+  if (failed) return Promise.reject(failed.err);
+  return cached(`dlp:${key}`, 5 * 60_000, () =>
     resolveSlots.run(() => tracked(async () => {
       const { stdout } = await run(
         YTDLP(),
@@ -65,6 +101,10 @@ export async function resolveUrls(id: string, q: number, lang: string): Promise<
       const urls = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
       if (!urls.length) throw new Error("yt-dlp returned no stream URL");
       return urls;
+    }).catch((e) => {
+      recordFailure(key, e);
+      noteUnplayable(id, e);
+      throw e;
     })),
   );
 }
@@ -91,12 +131,24 @@ export async function streamLive(id: string, q: number, lang: string, start: num
     ff?.kill("SIGKILL"); // viewer left or seeked: stop pulling from Google
   });
 
-  const urls = await resolveUrls(id, q, lang);
+  let urls: string[];
+  try {
+    urls = await resolveUrls(id, q, lang);
+  } catch (e) {
+    if (!gone) streamEvents.failed(); // the caller turns it into a classified JSON error (nothing was sent yet)
+    throw e;
+  }
   if (gone) return;
   const headers = { "content-type": "video/mp4", "cache-control": "no-store", "accept-ranges": "none" };
   if (req.method === "HEAD") return void res.writeHead(200, headers).end();
 
-  const release = await streamSlots.acquire(); // throws BusyError (-> 503) when all slots are in use
+  let release: () => void;
+  try {
+    release = await streamSlots.acquire(); // throws BusyError (-> 503) when all slots are in use
+  } catch (e) {
+    streamEvents.failed();
+    throw e;
+  }
   try {
     if (gone) return;
     await new Promise<void>((resolve) => {
@@ -113,9 +165,13 @@ export async function streamLive(id: string, q: number, lang: string, start: num
         done = true;
         clearTimeout(timer);
         children.delete(proc);
+        if (started) streamEvents.finished();
         if (!started && !gone) {
-          console.error(`ffmpeg ${id}: ${why}${stderr.trim() ? `: ${stderr.trim()}` : ""}`);
-          res.writeHead(502, { "content-type": "text/plain" }).end("could not stream video");
+          console.error(`ffmpeg ${logSafe(id, 16)}: ${logSafe(why)}${stderr.trim() ? `: ${logSafe(stderr.trim(), 500)}` : ""}`);
+          streamEvents.failed();
+          // Same JSON shape as every other error before headers; ffmpeg's own text (it holds URLs) stays in the log.
+          const code = classifyText(stderr) ?? "unknown";
+          res.writeHead(INFO[code].status, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" }).end(JSON.stringify(errorBody(code)));
         } else if (!gone) res.end();
         resolve();
       };
@@ -124,6 +180,7 @@ export async function streamLive(id: string, q: number, lang: string, start: num
         if (gone) return;
         if (!started) {
           started = true;
+          streamEvents.started();
           res.writeHead(200, headers);
         }
         if (!res.write(chunk)) {

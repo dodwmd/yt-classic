@@ -76,7 +76,7 @@ internal class AuthDataSource(
         }
         response = r
         if (!r.isSuccessful) {
-            val body = runCatching { r.body.bytes() }.getOrDefault(ByteArray(0))
+            val body = runCatching { r.peekBody(8192).bytes() }.getOrDefault(ByteArray(0)) // an error body is a short JSON: never read a huge one
             val headers = r.headers.toMultimap()
             close()
             throw HttpDataSource.InvalidResponseCodeException(r.code, r.message, null, headers, dataSpec, body)

@@ -59,6 +59,9 @@ test("fresh instance: shape, versions, no counts", async () => {
   assert.equal(s.resolves.lastSuccess, null);
   assert.equal(s.resolves.lastFailure, null);
   assert.equal(s.cache.ok, true);
+  assert.deepEqual(Object.keys(s.streams), ["active", "started", "finished", "failed"]);
+  assert.deepEqual(Object.keys(s.dataApi), ["unitsToday", "searchFallbackRemaining"]);
+  assert.ok(s.cache.hits >= 0 && s.cache.misses >= 0 && s.cache.dbBytes > 0);
   assert.ok(Number.isInteger(s.uptimeSeconds) && s.uptimeSeconds >= 0);
 });
 
@@ -111,7 +114,7 @@ test("user-caused failures (private, removed, age-restricted) are counted but ne
   assert.equal((await resolve("GGGGGGGGGG0")).status, 200);
   const before = await status();
   writeFileSync(join(tmp, "unavail"), "");
-  for (let i = 1; i <= FAILING_AFTER + 2; i++) assert.equal((await resolve(`GGGGGGGGGG${i}`)).status, 502);
+  for (let i = 1; i <= FAILING_AFTER + 2; i++) assert.equal((await resolve(`GGGGGGGGGG${i}`)).status, 404);
   let s = await status();
   assert.equal(s.resolves.failed, before.resolves.failed + FAILING_AFTER + 2);
   assert.equal(s.resolves.lastFailure.reason, "unavailable");

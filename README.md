@@ -217,7 +217,9 @@ The backend logs the yt-dlp version at start.
                 "lastSuccess": { "at": "<ISO time>" },
                 "lastFailure": { "at": "<ISO time>", "reason": "bot-check" } },
   "ffmpeg": { "present": true, "version": "8.0.1" }, "node": "v22.22.0", "uptimeSeconds": 61,
-  "cache": { "ok": true, "entries": 12, "bytes": 48213 } }
+  "cache": { "ok": true, "entries": 12, "bytes": 48213, "hits": 30, "misses": 12, "dbBytes": 212992 },
+  "streams": { "active": 0, "started": 2, "finished": 2, "failed": 1 },
+  "dataApi": { "unitsToday": 12, "searchFallbackRemaining": 20 } }
 ```
 
 `health` is `failing` when the last 3 real yt-dlp resolves failed with no success since, `degraded` when the latest
@@ -228,6 +230,62 @@ count toward `consecutiveFailures` or `health`. No video ids are returned (so th
 success and last failure (with a fixed reason label such as `bot-check`, `rate-limited`, `unavailable`, `timeout`,
 `network`) are kept in the SQLite `meta` table and survive restarts. Cache hits are not resolves. The web UI shows
 this at `/status` (rendered by the backend as plain text without JavaScript, because the shipped JS is at its size budget; link in the footer of the home page); the Android app has a Status button in Settings.
+
+### Error codes
+
+Failures are classified into a closed set (one classifier, `src/errors.ts`, fed by yt-dlp's stderr, the Data API's error
+reasons and HTTP statuses). Error responses are `{"error": "<message>", "code": "<code>", "retryable": bool}`; `error` is
+the same user-safe text for every cause (never a URL, path, stderr or token), and clients that predate `code` keep working.
+Streams answer with this JSON when they fail before the first byte; a mid-stream failure just ends the stream.
+
+| code | HTTP | retryable | meaning |
+| --- | --- | --- | --- |
+| `age-restricted` | 403 | no | needs a signed-in adult account |
+| `region-blocked` | 403 | no | not available in the server's country |
+| `members-only` | 403 | no | channel members only |
+| `private` | 404 | no | private video |
+| `removed` | 404 | no | deleted, terminated or otherwise unavailable |
+| `live` | 409 | no | live stream (not playable here) |
+| `upcoming` | 409 | no | live event or premiere not started |
+| `bot-check` | 502 | yes | YouTube asks the server to prove it is not a bot |
+| `rate-limited` | 429 | yes | HTTP 429 or Data API quota (`quotaExceeded`, `rateLimitExceeded`, ...); `Retry-After: 60` |
+| `network` | 502 | yes | timeouts, DNS, connection resets |
+| `busy` | 503 | yes | all `MAX_STREAMS` slots in use; `Retry-After: 5` |
+| `unknown` | 502 | yes | anything else (see the backend log) |
+
+**For older clients.** Failures that used to be a blanket 502 (and a plain-text body from the stream route) now use the
+statuses above with a JSON body: 404 for removed/private videos (including `/api/video/:id` for an unknown id), 403 for
+age/region/members, 409 for live/upcoming, 429 for rate limits and quota. Clients must key on the JSON, not on 502. The
+access-token lockout (`429 {"error":"too many attempts"}` with `Retry-After`) is a different 429: it has no `code`. A
+failed resolve is remembered for 30 seconds per video, quality and audio language, so the page load, the stream and
+the web player's error probe (`/stream/:id?probe=1`, JSON only, never starts ffmpeg or takes a stream slot) cost one
+yt-dlp run between them.
+
+The first seven are *skippable* (retrying will not help): both clients show no Retry button for them, and TV mode will
+use `isSkippable(code)` (Android `data/Errors.kt`) to move to the next video. `GET /api/video/:id` adds
+`"playable": false, "reason": "<code>", "message": "..."` when the Data API metadata (live, upcoming, age rating,
+private) or a recent yt-dlp failure already says the video cannot be played; the web watch page then shows the reason
+instead of a dead player, and a player error on the web page fetches the stream's JSON error to show the real cause.
+
+### Metrics
+
+`GET /api/metrics` returns Prometheus text format (counters reset on restart; labels come from closed lists, so the
+number of series is fixed no matter what is requested): `ytclassic_streams_active`, `_streams_started_total`,
+`_streams_finished_total`, `_streams_failed_total`, `ytclassic_resolve_seconds` (histogram of yt-dlp resolves, cache hits
+excluded), `ytclassic_http_requests_total{route,status}` (route class and status class), `ytclassic_errors_total{code}`,
+`ytclassic_cache_hits_total`, `_cache_misses_total`, `_cache_entries`, `ytclassic_dataapi_units_today` (estimated, UTC
+day), `ytclassic_search_fallback_remaining` (daily `SEARCH_FALLBACK_MAX` cap), `ytclassic_sqlite_bytes`,
+`ytclassic_uptime_seconds`. `ytclassic_sqlite_bytes` has no sample while the database is unreachable (`dbBytes` is `null` in `/api/status`). The Data API day counters are kept in the SQLite `meta` table, so a restart does not reset the search-fallback cap. The resolve histogram includes failed resolves. Cache hit ratio is `hits / (hits + misses)`; hits include lookups that joined an in-flight fetch or were restored from disk, and all counters reset on restart, so use `rate()` over a window rather than the raw ratio. It is inside the access-token gate like every `/api` route, so with `ACCESS_TOKEN` set the
+scraper must send the token:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: ytclassic
+    metrics_path: /api/metrics
+    authorization: { type: Bearer, credentials: "<ACCESS_TOKEN>" }   # omit when ACCESS_TOKEN is unset
+    static_configs: [{ targets: ["192.168.1.153:8080"] }]            # also add this host to ALLOWED_HOSTS if set
+```
 
 **Network exposure.** `compose.yaml` publishes port 8080 on all interfaces. To limit it, change the mapping to
 `"127.0.0.1:8080:8080"` or your LAN address. Set `ALLOWED_HOSTS` (below) to guard against DNS-rebinding. The app has
@@ -593,6 +651,9 @@ backend/
   src/app.ts             routes and request handling
   src/yt/api.ts          YouTube Data API client
   src/yt/dlp.ts          yt-dlp URL resolution + live ffmpeg remux
+  src/errors.ts          the one failure classifier: codes, messages, HTTP statuses
+  src/metrics.ts         in-memory counters and the Prometheus text for /api/metrics (scrape.ts gathers the gauges)
+  src/quota.ts           Data API units used today and the daily search-fallback cap
   src/status.ts          /api/status: resolve counters, persisted last success/failure, health
   src/yt/search.ts       yt-dlp search (Data API fallback)
   src/yt/innertube.ts    related videos from YouTube's /next

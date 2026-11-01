@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video, videoFacts } from "./yt/api.ts";
-import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
+import { QUALITIES, VIDEO_ID, knownUnplayable, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { QuotaError, tabRequestWait } from "./tabquota.ts";
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
@@ -14,7 +14,10 @@ import { TV_MIN_SUBS, MAX_SEEN_PARAM, TvLimiter, parseSeen, pickNext } from "./t
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
-import { BusyError } from "./limit.ts";
+import { logSafe } from "./http.ts";
+import { INFO, classifyError, errorBody, type ErrorCode } from "./errors.ts";
+import { countError, countRequest, routeClass } from "./metrics.ts";
+import { metricsText } from "./scrape.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
 import { MAX_MEMBERSHIP, lookupAllowed, noteLookup, PLAYLIST_ID, addItem, canAdd, createPlaylist, deletePlaylist, getPlaylist, listItems, listPlaylists, membership, moveItem, refreshMeta, removeItem, renamePlaylist } from "./playlists.ts";
 import { MAX_IMPORT_BYTES, decodeBody, exportCsv, exportOpml, importMessage, parseImport } from "./subsio.ts";
@@ -62,6 +65,13 @@ export function sameOrigin(req: IncomingMessage): boolean {
 function hostAllowed(req: IncomingMessage): boolean {
   const allowed = (process.env.ALLOWED_HOSTS ?? "").split(",").map((h) => h.trim()).filter(Boolean);
   return !allowed.length || allowed.includes(req.headers.host ?? "");
+}
+
+/** A classified failure: the status comes from the code, the body is {error, code, retryable}. */
+function classified(res: ServerResponse, code: ErrorCode, message?: string): void {
+  countError(code);
+  const retry = code === "busy" ? "5" : code === "rate-limited" ? "60" : "";
+  json(res, INFO[code].status, errorBody(code, message), retry ? { "retry-after": retry } : {});
 }
 
 const tooMany = (res: ServerResponse, secs: number) => json(res, 429, { error: "too many attempts" }, { "retry-after": String(secs) });
@@ -225,6 +235,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   }
 
   if (path === "/api/status") return json(res, 200, await statusReport());
+  if (path === "/api/metrics") return void res.writeHead(200, { "content-type": "text/plain; version=0.0.4; charset=utf-8", "cache-control": "no-store" }).end(metricsText());
   // Server-rendered, no JavaScript: the shipped JS is at its size budget, and this page is a plain readout.
   if (path === "/status" && req.method === "GET") {
     // A page, not an API call: with an access token set, send a visitor without a session to the login page.
@@ -316,7 +327,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const id = path.slice("/api/video/".length);
     if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
     const v = await video(id);
-    if (!v) return json(res, 404, { error: "video not found" });
+    if (!v) return classified(res, "removed", "Video not found: it may have been removed or made private.");
     const quality = parseQuality(url.searchParams.get("q"));
     const a = url.searchParams.get("a");
     const lang = parseLang(a);
@@ -324,7 +335,10 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     refreshMeta({ id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });
     const related = await relatedFor(v);
     const progress = getProgress(id) ?? undefined; // omitted when nothing is known
-    return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "", progress });
+    // Playability hint, only when something already says it can't be played (Data API metadata or a recent yt-dlp failure).
+    const reason = v.unplayable ?? knownUnplayable(id);
+    const hint = reason ? { playable: false, reason, message: INFO[reason].message } : {};
+    return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "", progress, ...hint });
   }
 
   if (path === "/api/history" && req.method === "GET") {
@@ -536,7 +550,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   if (path.startsWith("/stream/")) {
     const id = path.slice("/stream/".length);
     if (!VIDEO_ID.test(id)) return void res.writeHead(400, text).end("bad video id");
-    return await streamLive(id, parseQuality(url.searchParams.get("q")), parseLang(url.searchParams.get("a")), parseStart(url.searchParams.get("t")), req, res);
+    const quality = parseQuality(url.searchParams.get("q"));
+    const lang = parseLang(url.searchParams.get("a"));
+    if (url.searchParams.get("probe") === "1") {
+      // The web player's way to learn why a stream failed: resolves exactly like a stream (a recent failure is reused)
+      // and answers JSON, but never starts ffmpeg, takes a stream slot or counts as a stream.
+      await resolveUrls(id, quality, lang);
+      return json(res, 200, { ok: true });
+    }
+    return await streamLive(id, quality, lang, parseStart(url.searchParams.get("t")), req, res);
   }
 
   if (path.startsWith("/api/")) return json(res, 404, { error: "not found" });
@@ -544,13 +566,16 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   res.writeHead(404, text).end("not found");
 }
 
+/** Methods that may appear in the request log; anything else is logged as OTHER. */
+const METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"];
+
 function fail(err: unknown, res: ServerResponse): void {
-  console.error(err);
-  if (res.headersSent) return void res.destroy();
-  if (err instanceof BusyError) return json(res, 503, { error: "The server is busy. Try again in a few seconds." }, { "retry-after": "5" });
+  console.error(logSafe(err instanceof Error ? (err.stack ?? err.message) : err, 4000)); // one line: error text can echo request data
+  const code = classifyError(err);
+  if (res.headersSent) return void (countError(code), res.destroy());
   // Operator-facing config problems are safe and useful to show; everything else is logged, not echoed.
-  const msg = err instanceof Error && err.message.startsWith("YT_API_KEY") ? err.message : "Something went wrong talking to YouTube. Check the backend log.";
-  json(res, 502, { error: msg });
+  const msg = err instanceof Error && err.message.startsWith("YT_API_KEY") ? err.message : undefined;
+  classified(res, code, msg);
 }
 
 export function createApp(): Server {
@@ -558,9 +583,10 @@ export function createApp(): Server {
   const server = createServer((req, res) => {
     const t0 = Date.now();
     const path = (req.url ?? "").split("?")[0];
-    if (path !== "/healthz" && !path.startsWith("/static/")) {
-      res.once("close", () => console.log(`${req.method} ${path} ${res.statusCode} ${Date.now() - t0}ms`));
-    }
+    res.once("close", () => {
+      if (res.headersSent) countRequest(path, res.statusCode); // a client that left before any answer isn't a 2xx
+      if (path !== "/healthz" && !path.startsWith("/static/")) console.log(`${METHODS.find((m) => m === req.method) ?? "OTHER"} ${routeClass(path)} ${res.statusCode} ${Date.now() - t0}ms`);
+    });
     handle(req, res, gate).catch((err) => fail(err, res));
   });
   server.headersTimeout = 15_000;

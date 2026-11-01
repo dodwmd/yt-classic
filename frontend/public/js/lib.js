@@ -11,9 +11,12 @@ export async function api(path, init) {
     location.replace(`/login?next=${encodeURIComponent(location.pathname + location.search)}`);
     return new Promise(() => {});
   }
-  if (!res.ok) throw Object.assign(new Error(body.error || `Request failed (${res.status})`), { code: body.code });
+  if (!res.ok) throw Object.assign(new Error(explain(body) || `Request failed (${res.status})`), { code: body.code });
   return body;
 }
+
+// The server's classified message (error JSON: {error, code, retryable}); retryable failures get a hint.
+export const explain = (b) => b.error && (b.retryable ? `${b.error} You can try again.` : b.error);
 
 // A channel URL's tab, playlist and page token: the same allowlists as the backend's (a test keeps the patterns in step).
 // Nothing from the address bar is passed on as it is: the tab comes out of a fixed Map (so only a constant can come out),
@@ -60,8 +63,9 @@ export const thumbUrl = (id, size = "mqdefault") => `https://i.ytimg.com/vi/${en
 export async function run(main) {
   const status = $("#status");
   try {
-    await main();
-    status.hidden = true;
+    const note = await main(); // a string from main is shown as a notice (the page still rendered)
+    status.textContent = note || "";
+    status.hidden = !note;
     tvLink();
     fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {

@@ -41,6 +41,8 @@ class ApiTest {
                 path == "/api/home" -> 200 to fixture("home")
                 path == "/api/search" -> 200 to fixture("search")
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
+                path == "/api/video/private0001" -> 404 to """{"error":"This video is private.","code":"private","retryable":false}"""
+                path == "/api/video/limited0001" -> 429 to """{"error":"YouTube is limiting requests right now. Try again in a while.","code":"rate-limited","retryable":true}"""
                 path == "/api/video/bad" -> 400 to """{"error":"bad video id"}"""
                 path.startsWith("/api/channel/") -> 200 to fixture("channel")
                 path == "/api/history" -> 200 to fixture("history")
@@ -90,6 +92,10 @@ class ApiTest {
         assertEquals("3 minutes ago · bot-check", rows["Last failure"])
         assertEquals("1 ok, 1 failed", rows["Resolves since start"])
         assertEquals("8.0.1", rows["ffmpeg"])
+        assertEquals("0 active, 2 started, 1 failed", rows["Streams"])
+        assertEquals("3 hits, 4 misses", rows["Cache lookups"])
+        assertEquals("12 units used, 20 search fallbacks left", rows["Data API today"])
+        assertTrue(rows["Database and cache"]!!.contains("database 208 KB"))
         val empty = io.github.dodwmd.ytclassic.data.statusRows(io.github.dodwmd.ytclassic.data.StatusResponse()).toMap()
         assertEquals("never", empty["Last failure"])
         assertEquals("not found", empty["yt-dlp"])
@@ -139,6 +145,19 @@ class ApiTest {
     fun serverErrorMessageIsSurfaced() {
         val e = assertFailsWith<ApiException> { runBlocking { api.video("bad") } }
         assertEquals("bad video id", e.message)
+    }
+
+    @Test
+    fun classifiedErrorsCarryTheCodeAndRetryFlag() {
+        val priv = assertFailsWith<ApiException> { runBlocking { api.video("private0001") } }
+        assertEquals("This video is private.", priv.message)
+        assertEquals("private", priv.code)
+        assertFalse(priv.retryable)
+        val limited = assertFailsWith<ApiException> { runBlocking { api.video("limited0001") } }
+        assertEquals("rate-limited", limited.code)
+        assertTrue(limited.retryable)
+        // An older server (no code) still gives its message and a null code.
+        assertEquals(null, assertFailsWith<ApiException> { runBlocking { api.video("bad") } }.code)
     }
 
     @Test
