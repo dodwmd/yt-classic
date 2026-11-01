@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.LocalContentColor
@@ -18,6 +19,10 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.movableContentOf
+import androidx.compose.ui.semantics.Role
+import io.github.dodwmd.ytclassic.ui.classicSliderColors
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -32,6 +37,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -173,8 +179,8 @@ fun StreamPlayer(
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(
                 onClick = { if (finished) load(0) else if (isPlaying) player.pause() else player.play() },
-                modifier = Modifier.semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
-            ) { Text(if (finished) "↻" else if (isPlaying) "❚❚" else "▶", color = textColor) }
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
+            ) { PlayerIconView(if (finished) PlayerIcon.Replay else if (isPlaying) PlayerIcon.Pause else PlayerIcon.Play, textColor, iconSize = if (finished) 36.dp else 28.dp) }
             if (total > 0) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
@@ -184,6 +190,7 @@ fun StreamPlayer(
                         dragging = null
                     },
                     valueRange = 0f..total.toFloat(),
+                    colors = classicSliderColors(overVideo = fullscreen),
                     modifier = Modifier.weight(1f).semantics {
                         contentDescription = "Seek"
                         stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}"
@@ -192,12 +199,16 @@ fun StreamPlayer(
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
             }
             TextButton(
-                onClick = { onFullscreen(!fullscreen) },
-                modifier = Modifier.semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
-            ) { Text(if (fullscreen) "⤡" else "⤢", color = textColor) }
+                onClick = { controlsVisible = true; onFullscreen(!fullscreen) }, // hidden controls must not outlive a fullscreen session
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
+            ) { PlayerIconView(if (fullscreen) PlayerIcon.ExitFullscreen else PlayerIcon.Fullscreen, textColor) }
         }
     }
-    val videoView: @Composable (Modifier) -> Unit = { m ->
+    // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
+    // surface may still redraw for a frame when it is re-attached).
+    // The movable content below is remembered once per player, so Retry must reach the newest `load`.
+    val retry by rememberUpdatedState { load(positionSec) }
+    val videoView = remember(player) { movableContentOf { m: Modifier ->
         Box(m) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
@@ -208,23 +219,24 @@ fun StreamPlayer(
             error?.let { message ->
                 Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(message, color = Color.White)
-                    Button(onClick = { load(positionSec) }) { Text("Retry") }
+                    Button(onClick = { retry() }) { Text("Retry") }
                 }
             }
         }
-    }
+    } }
 
     if (fullscreen) {
         // The video fills the screen; tap it to show or hide the controls laid over the bottom.
         Box(modifier.fillMaxSize().background(Color.Black)) {
             videoView(
-                Modifier.fillMaxSize().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) {
-                    controlsVisible = !controlsVisible
-                },
+                Modifier.fillMaxSize().clickable(
+                    interactionSource = remember { MutableInteractionSource() }, indication = null,
+                    role = Role.Button, onClickLabel = if (controlsVisible) "Hide controls" else "Show controls",
+                ) { controlsVisible = !controlsVisible }.semantics { contentDescription = "Video" },
             )
             if (controlsVisible) {
                 Column(
-                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.55f))
+                    Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.7f))
                         .windowInsetsPadding(WindowInsets.safeDrawing),
                 ) { transport() }
             }
