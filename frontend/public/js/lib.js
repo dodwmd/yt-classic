@@ -15,12 +15,15 @@ export async function api(path, init) {
   return body;
 }
 
-// A channel URL's tab, playlist and page token: the same allowlists as the backend's (a test keeps the playlist id pattern in step).
+// A channel URL's tab, playlist and page token: the same allowlists as the backend's (a test keeps the patterns in step).
+// Nothing from the address bar is passed on as it is: the tab comes out of a fixed Map (so only a constant can come out),
+// the others are the regexps' own captured groups, and requests encode them again.
 export const TABS = ["videos", "playlists", "shorts", "live", "about"];
-const LIST_ID = /^(?:PL[\w-]{16,32}|UU[\w-]{22}|OL[\w-]{20,40}|FL[\w-]{22}|LL[\w-]{22})$/, TOKEN = /^[\w-]{1,120}$/;
+const TAB_NAME = new Map(TABS.map((t) => [t, t]));
+const LIST_ID = /^((?:PL[\w-]{16,32}|UU[\w-]{22}|OL[\w-]{20,40}|FL[\w-]{22}|LL[\w-]{22}))$/, TOKEN = /^([\w-]{1,120})$/;
 export function channelParams(q) {
-  const tab = TABS.includes(q.get("tab")) ? q.get("tab") : "videos";
-  return { tab, list: tab === "playlists" && LIST_ID.test(q.get("list")) ? q.get("list") : "", pageToken: TOKEN.test(q.get("pageToken")) ? q.get("pageToken") : "" };
+  const tab = TAB_NAME.get(q.get("tab")) ?? "videos";
+  return { tab, list: tab === "playlists" ? LIST_ID.exec(q.get("list") ?? "")?.[1] ?? "" : "", pageToken: TOKEN.exec(q.get("pageToken") ?? "")?.[1] ?? "" };
 }
 export function channelHref(id, { tab = "videos", list = "", pageToken = "" } = {}) {
   const q = new URLSearchParams();
@@ -29,11 +32,12 @@ export function channelHref(id, { tab = "videos", list = "", pageToken = "" } = 
   if (pageToken) q.set("pageToken", pageToken);
   return `/channel/${encodeURIComponent(id)}${q.size ? `?${q}` : ""}`;
 }
-// The two API requests a channel page makes: the header (never the uploads, except for the Videos tab) and the tab's data.
+// The API requests a channel page makes: the header (never the uploads, except for the Videos tab) and the tab's data.
+const TAB_PATH = new Map([["playlists", "/playlists"], ["shorts", "/shorts"], ["live", "/live"], ["about", "/about"]]);
 export function channelRequests(id, { tab, list, pageToken }) {
-  const base = `/api/channel/${encodeURIComponent(id)}`, tok = pageToken ? `?${new URLSearchParams({ pageToken })}` : "";
-  if (tab === "videos") return { head: `${base}${tok}`, body: null };
-  return { head: `${base}/head`, body: `${base}/${tab === "playlists" && list ? `playlist/${encodeURIComponent(list)}` : tab}${tok}` };
+  const base = "/api/channel/" + encodeURIComponent(id), tok = pageToken ? "?pageToken=" + encodeURIComponent(pageToken) : "";
+  if (tab === "videos") return { head: base + tok, body: null };
+  return { head: base + "/head", body: base + (list ? "/playlist/" + encodeURIComponent(list) : TAB_PATH.get(tab)) + tok };
 }
 
 const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})(?:\?([^#]*))?$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;

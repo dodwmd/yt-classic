@@ -106,6 +106,7 @@ test("when both requests fail nothing is left unhandled and the error is shown",
 test("the playlist and page token patterns are the backend's", () => {
   const be = readFileSync(new URL("../../backend/src/yt/api.ts", import.meta.url), "utf8");
   const fe = readFileSync(new URL("../public/js/lib.js", import.meta.url), "utf8");
-  assert.equal(/LIST_ID = (\/.*?\/), TOKEN/.exec(fe)?.[1], /YT_PLAYLIST_ID = (\/.*\/);/.exec(be)?.[1]);
-  assert.equal(/TOKEN = (\/.*?\/);/.exec(fe)?.[1], /PAGE_TOKEN = (\/.*\/);/.exec(be)?.[1]);
+  const bare = (re) => re.replace(/^\/\^\((.*)\)\$\/$/, "/^$1$/"); // the page's patterns capture the whole match
+  assert.equal(bare(/LIST_ID = (\/.*?\/), TOKEN/.exec(fe)?.[1]), /YT_PLAYLIST_ID = (\/.*\/);/.exec(be)?.[1]);
+  assert.equal(bare(/TOKEN = (\/.*?\/);/.exec(fe)?.[1]), /PAGE_TOKEN = (\/.*\/);/.exec(be)?.[1]);
 });
