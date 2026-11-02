@@ -41,7 +41,7 @@ export const LAZY_CAPS = {
   "comments.js": 2000,
   "quality.js": 2050,
   "chapters.js": 2250,
-  // subtitles (PR #41): add `"subs.js": 3050` here (2943 bytes gzipped now; the generic 3 KB per-module ceiling above still applies).
+  "subs.js": 3050,
 };
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 
@@ -74,13 +74,18 @@ test("JavaScript per page stays within the size budget", () => {
 
 // Comments are opt-in: their code is fetched with a dynamic import() on first open, so it must stay out of every page's
 // static graph (the budget above) and stay small.
-test("the comments module is lazy: never statically imported, under 2.5 KB gzipped", () => {
+test("the comments module is lazy: never statically imported, under 3 KB gzipped", () => {
   const LAZY_MAX = 2.5 * 1024;
   assert.match(read("js/watch.js"), /import\("\.\/comments\.js"\)/);
   for (const f of jsFiles) assert.doesNotMatch(read(`js/${f}`), /\bfrom\s+"\.\/comments\.js"/, `${f} imports comments.js statically`);
   const size = gz("comments.js");
   console.log(`# JS comments.js (lazy) = ${size} bytes gzipped (max ${LAZY_MAX})`);
   assert.ok(size < LAZY_MAX, `comments.js is ${size} bytes gzipped`);
+});
+
+test("the subtitles module is lazy: only watch.js imports it, with a catch (its size is capped in LAZY_CAPS)", () => {
+  assert.match(read("js/watch.js"), /import\("\.\/subs\.js"\)[^;]*\.catch\(/);
+  for (const f of jsFiles) assert.doesNotMatch(read(`js/${f}`), /\bfrom\s+"\.\/subs\.js"/, `${f} imports subs.js statically`);
 });
 
 test("no HTML-injection or dynamic-code sinks in the JS", () => {

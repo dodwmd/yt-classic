@@ -11,6 +11,16 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
+import io.github.dodwmd.ytclassic.data.label
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.launch
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.input.pointer.pointerInput
@@ -187,17 +197,27 @@ fun StreamPlayer(
     fun cancelRun() { run.finish(); overlay = null }
     fun jump(seconds: Long) { cancelRun(); host.load(host.positionSeconds() + seconds) }
 
+    val captions = rememberCaptions(app.api, app.settings, video.id, isPlaying, positionSec) { host.positionMs() }
+    val captionScope = rememberCoroutineScope()
     val textColor = if (fullscreen) Color.White else LocalContentColor.current
     val chapterName = chapters.getOrNull(chapterIndexAt(chapters, (dragging ?: positionSec.toFloat()).toLong()))?.title
     val sliderColors = classicSliderColors(overVideo = fullscreen)
     val sliderSource = remember { MutableInteractionSource() }
+    val fontScale = LocalDensity.current.fontScale
     val transport: @Composable () -> Unit = {
-      Column(Modifier.fillMaxWidth()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+      // The row's real width decides what fits (a two-pane layout gives the player only part of the screen).
+      BoxWithConstraints(Modifier.fillMaxWidth()) {
+        val rowWidthDp = maxWidth.value
+        Column(Modifier.fillMaxWidth()) {
+            val plan = transportPlan(rowWidthDp, fontScale, pip.available, onSkip != null || onStop != null)
+            val compact = plan.inline.isEmpty() && plan.overflow.isNotEmpty() // too narrow: the seek bar gets a row of its own
+            val playBtn: @Composable () -> Unit = {
             TextButton(
                 onClick = { if (isPlaying) host.pause() else host.play() },
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (finished) "Replay" else if (isPlaying) "Pause" else "Play" },
             ) { PlayerIconView(if (finished) PlayerIcon.Replay else if (isPlaying) PlayerIcon.Pause else PlayerIcon.Play, textColor, iconSize = if (finished) 36.dp else 28.dp) }
+            }
+            val seekBar: @Composable RowScope.() -> Unit = {
             if (total > 0) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
@@ -230,44 +250,77 @@ fun StreamPlayer(
                         stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}" + (chapterName?.let { ", chapter $it" } ?: "")
                     },
                 )
-                Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
+                Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, maxLines = 1, softWrap = false, modifier = Modifier.padding(horizontal = 8.dp))
             }
+            }
+            val tail: @Composable RowScope.() -> Unit = {
             var speedMenu by remember { mutableStateOf(false) }
-            Box {
+            var ccMenu by remember { mutableStateOf(false) }
+            var more by remember { mutableStateOf(false) }
+            val openCc: () -> Unit = { ccMenu = true; captionScope.launch { captions.ensureTracks() } }
+            // Inline: each optional control is its own button (its menu hangs off it). Compact: one overflow button
+            // opens a menu of them, and the speed and CC menus then hang off that button too.
+            @Composable fun speedMenuView() = SpeedMenu(speedMenu, { speedMenu = false }, host.speed) { speedMenu = false; host.changeSpeed(it) }
+            @Composable fun ccMenuView() = CaptionMenu(ccMenu, { ccMenu = false }, captions) { ccMenu = false; captionScope.launch { captions.choose(it) } }
+            if (TransportItem.Speed in plan.inline) Box {
                 TextButton(
                     onClick = { speedMenu = true },
                     modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Playback speed ${speedLabel(host.speed)}" },
                 ) { Text(speedLabel(host.speed), color = textColor) }
-                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
-                    for (s in PLAYBACK_SPEEDS) {
-                        DropdownMenuItem(
-                            text = { Text(speedLabel(s)) },
-                            onClick = {
-                                speedMenu = false
-                                host.changeSpeed(s) // applies it and keeps it as the global default
-                            },
-                            modifier = Modifier.semantics { role = Role.RadioButton; selected = s == host.speed; stateDescription = if (s == host.speed) "Selected" else "Not selected" },
-                        )
-                    }
-                }
+                speedMenuView()
             }
-            if (onSkip != null) TextButton(onClick = onSkip, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Skip", color = textColor) }
-            if (onStop != null) TextButton(onClick = onStop, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Stop", color = textColor) }
-            if (pip.available) TextButton(
+            if (TransportItem.Captions in plan.inline) Box {
+                TextButton(
+                    onClick = openCc,
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics {
+                        contentDescription = "Subtitles"
+                        stateDescription = if (captions.enabled) "On" else "Off"
+                    },
+                ) { Text("CC", color = textColor, fontWeight = if (captions.enabled) FontWeight.Bold else FontWeight.Normal, textDecoration = if (captions.enabled) TextDecoration.Underline else null) }
+                ccMenuView()
+            }
+            if (TransportItem.Skip in plan.inline && onSkip != null) TextButton(onClick = onSkip, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Skip", color = textColor) }
+            if (TransportItem.Stop in plan.inline && onStop != null) TextButton(onClick = onStop, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Stop", color = textColor) }
+            if (TransportItem.Pip in plan.inline) TextButton(
                 onClick = pip.enter,
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Picture in picture" },
             ) { PlayerIconView(PlayerIcon.Pip, textColor) }
+            if (plan.overflow.isNotEmpty()) Box {
+                TextButton(
+                    onClick = { more = true },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "More controls" },
+                ) { Text("\u22EE", color = textColor, fontSize = 20.sp) }
+                DropdownMenu(expanded = more, onDismissRequest = { more = false }) {
+                    for (item in plan.overflow) when (item) {
+                        TransportItem.Speed -> DropdownMenuItem(text = { Text("Speed ${speedLabel(host.speed)}") }, onClick = { more = false; speedMenu = true })
+                        TransportItem.Captions -> DropdownMenuItem(
+                            text = { Text(if (captions.enabled) "Subtitles: on" else "Subtitles") },
+                            onClick = { more = false; openCc() },
+                        )
+                        TransportItem.Pip -> DropdownMenuItem(text = { Text("Picture in picture") }, onClick = { more = false; pip.enter() })
+                        TransportItem.Skip -> if (onSkip != null) DropdownMenuItem(text = { Text("Skip") }, onClick = { more = false; onSkip() })
+                        TransportItem.Stop -> if (onStop != null) DropdownMenuItem(text = { Text("Stop") }, onClick = { more = false; onStop() })
+                    }
+                }
+                speedMenuView()
+                ccMenuView()
+            }
             TextButton(
                 onClick = { controlsVisible = true; onFullscreen(!fullscreen) }, // hidden controls must not outlive a fullscreen session
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
             ) { PlayerIconView(if (fullscreen) PlayerIcon.ExitFullscreen else PlayerIcon.Fullscreen, textColor) }
+            }
+            if (compact) Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { seekBar() }
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) { playBtn(); Spacer(Modifier.weight(1f)); tail() }
+            } else Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) { playBtn(); seekBar(); tail() }
+            if (chapterName != null && total > 0) Text(chapterName, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp))
         }
-        if (chapterName != null && total > 0) Text(chapterName, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp))
       }
     }
     // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
     // surface may still redraw for a frame when it is re-attached).
-    val videoView = remember(host) { movableContentOf { m: Modifier, overlay: Pair<TapZone, Long>?, taps: Int ->
+    val videoView = remember(host) { movableContentOf { m: Modifier, overlay: Pair<TapZone, Long>?, taps: Int, cap: Pair<String, Dp> ->
         Box(m.onGloballyPositioned {
             val r = it.boundsInWindow()
             // The picture inside the view (not the black bars), as the transition's source.
@@ -282,6 +335,7 @@ fun StreamPlayer(
                 modifier = Modifier.matchParentSize(),
             )
             overlay?.let { (zone, delta) -> TapSeekOverlay(zone, delta, taps, reduceMotion, Modifier.align(if (zone == TapZone.Back) Alignment.CenterStart else Alignment.CenterEnd)) }
+            if (!pip.inPip) CaptionOverlay(cap.first, fullscreen, cap.second, Modifier.align(Alignment.BottomCenter))
             if (host.buffering && host.error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             host.error?.let { message ->
                 Column(
@@ -331,7 +385,7 @@ fun StreamPlayer(
             videoView(
                 // In the small window the system owns taps (they show its own buttons): no gesture or click target there.
                 if (pip.inPip) Modifier.fillMaxSize() else Modifier.fillMaxSize().then(gestures).semantics { contentDescription = "Video" },
-                overlay, taps,
+                overlay, taps, captions.notice.ifEmpty { captions.text } to (if (controlsVisible) 64.dp else 0.dp),
             )
             if (controlsVisible && !pip.inPip) {
                 Column(
@@ -345,7 +399,7 @@ fun StreamPlayer(
             // In landscape a full-width 16:9 box would fill the screen; cap its height so the details stay reachable.
             val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.6f).toDp() }
             Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
-                videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f).then(if (pip.inPip) Modifier else gestures), overlay, taps)
+                videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f).then(if (pip.inPip) Modifier else gestures), overlay, taps, captions.notice.ifEmpty { captions.text } to 0.dp)
             }
             transport()
             // Scrolls sideways when the tiers (up to 2160p, and Auto) do not fit a narrow screen.
@@ -394,5 +448,43 @@ private fun TapSeekOverlay(zone: TapZone, delta: Long, taps: Int, reduceMotion: 
             modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 14.dp, vertical = 8.dp)
                 .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = (if (delta > 0) "Forward " else "Rewind ") + kotlin.math.abs(delta) + " seconds" },
         )
+    }
+}
+
+@Composable
+private fun SpeedMenu(expanded: Boolean, onDismiss: () -> Unit, current: Float, onPick: (Float) -> Unit) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        for (s in PLAYBACK_SPEEDS) {
+            DropdownMenuItem(
+                text = { Text(speedLabel(s)) },
+                onClick = { onPick(s) }, // applies it and keeps it as the global default
+                modifier = Modifier.semantics { role = Role.RadioButton; selected = s == current; stateDescription = if (s == current) "Selected" else "Not selected" },
+            )
+        }
+    }
+}
+
+/** Off plus the tracks; the list is fetched the first time this opens, so the menu says so while it waits and when there is nothing. */
+@Composable
+private fun CaptionMenu(expanded: Boolean, onDismiss: () -> Unit, captions: CaptionsState, onPick: (String?) -> Unit) {
+    DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
+        DropdownMenuItem(
+            text = { Text("Off") },
+            onClick = { onPick(null) },
+            modifier = Modifier.semantics { role = Role.RadioButton; selected = !captions.enabled; stateDescription = if (!captions.enabled) "Selected" else "Not selected" },
+        )
+        when {
+            captions.load == TrackLoad.Loading || captions.load == TrackLoad.NotAsked -> DropdownMenuItem(text = { Text("Loading\u2026") }, onClick = {}, enabled = false)
+            captions.load == TrackLoad.Failed -> DropdownMenuItem(text = { Text(NOTICE_UNAVAILABLE) }, onClick = {}, enabled = false)
+            captions.tracks.isEmpty() -> DropdownMenuItem(text = { Text(NOTICE_NO_SUBTITLES) }, onClick = {}, enabled = false)
+            else -> for (t in captions.tracks) {
+                val on = captions.enabled && t.lang == captions.lang
+                DropdownMenuItem(
+                    text = { Text(t.label()) },
+                    onClick = { onPick(t.lang) },
+                    modifier = Modifier.semantics { role = Role.RadioButton; selected = on; stateDescription = if (on) "Selected" else "Not selected" },
+                )
+            }
+        }
     }
 }

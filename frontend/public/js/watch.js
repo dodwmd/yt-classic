@@ -9,7 +9,7 @@ const explicit = params.has("t") ? Math.max(0, Math.floor(Number(params.get("t")
 run(async () => {
   const query = new URLSearchParams();
   for (const k of ["q", "a"]) if (params.get(k)) query.set(k, params.get(k));
-  // quality.js (loaded on demand, also for the menu below) adds the remembered quality and, for Auto and 4K, this browser's decoders.
+  // quality.js (lazy) adds the remembered quality and this browser's decoders.
   const qm = await import("./quality.js").catch(() => null);
   const caps = qm?.prefs(query);
   const res = await api(`/api/video/${encodeURIComponent(id)}?${query}`);
@@ -32,12 +32,15 @@ run(async () => {
   const bar = $(".bar", player);
   bar.max = v.durationSeconds || 0;
   bar.value = start;
-  // When the server already knows the video can't play, say why and wait for "Try anyway": nothing is requested until then.
+  // An unplayable video waits for "Try anyway": nothing is requested until then.
   const mount = () => {
     video.src = start ? `${base}&t=${start}` : base;
     player.hidden = false;
     const now = initPlayer(player);
-    if (now) reportProgress(video, now, { id: v.id });
+    if (now) {
+      reportProgress(video, now, { id: v.id });
+      import("./subs.js").then((m) => m.subtitles(player, now, v.id)).catch(() => {});
+    }
     video.addEventListener("error", () => explainFailure(video));
     return now;
   };
@@ -80,8 +83,7 @@ run(async () => {
   return playable === false ? message : "";
 });
 
-// The stream's JSON error (sent before any video bytes) is invisible to <video>: ask the stream route's probe (it
-// resolves like a stream, reusing a recent failure, but never starts ffmpeg or takes a stream slot) and show the reason.
+// <video> can't see the stream's JSON error: ask the probe route (no ffmpeg, no slot) and show the reason.
 async function explainFailure(video) {
   try {
     const r = await fetch(`${video.currentSrc}&probe=1`);

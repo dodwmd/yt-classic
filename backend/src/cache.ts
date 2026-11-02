@@ -195,6 +195,16 @@ export function isCached(key: string): boolean {
   return !!hit && hit.exp > Date.now();
 }
 
+/** Drops one entry from memory and disk (e.g. a result holding URLs that stopped working). */
+export function forget(key: string): void {
+  store.delete(key);
+  try {
+    stmt(getDb(), "DELETE FROM cache WHERE key = ?").run(key);
+  } catch (e) {
+    diskFailed("forget", e);
+  }
+}
+
 /** Forgets the in-memory entries only (what a restart does); the persisted copies stay. */
 export function clearCache(): void {
   store.clear();

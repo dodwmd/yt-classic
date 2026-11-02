@@ -19,6 +19,8 @@ private val PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
 private val BACKGROUND_AUDIO = booleanPreferencesKey("background_audio")
 private val PICTURE_IN_PICTURE = booleanPreferencesKey("picture_in_picture")
 private val QUALITY_PREF = intPreferencesKey("quality_pref")
+private val CAPTIONS_ON = booleanPreferencesKey("captions_on")
+private val CAPTIONS_LANG = stringPreferencesKey("captions_lang")
 private val AUTO_UPDATE_CHECK = booleanPreferencesKey("auto_update_check")
 private val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
 
@@ -71,6 +73,17 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setQualityPref(q: Int) {
         context.dataStore.edit { it[QUALITY_PREF] = q }
+    }
+
+    /** Subtitles on or off (off by default) and the last language chosen: one global choice, like the speed. */
+    val captionsOn: Flow<Boolean> = context.dataStore.data.map { it[CAPTIONS_ON] ?: false }
+    val captionsLang: Flow<String> = context.dataStore.data.map { it[CAPTIONS_LANG] ?: "" }
+
+    suspend fun setCaptions(on: Boolean, lang: String) {
+        context.dataStore.edit {
+            it[CAPTIONS_ON] = on
+            if (lang.isNotEmpty()) it[CAPTIONS_LANG] = lang
+        }
     }
 
     /** Check GitHub for a new release once a week when the app starts. Off by default: the check contacts GitHub. */

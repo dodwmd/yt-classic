@@ -1,0 +1,21 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.000 align:start position:0%
+hello
+world<00:00:01.000><c> again</c>
+
+00:00:02.000 --> 00:00:02.010 align:start position:0%
+world again
+
+00:00:02.010 --> 00:00:04.000 align:start position:0%
+world again
+next<00:00:03.000><c> line</c>
+
+00:00:04.000 --> 00:00:04.010 align:start position:0%
+next line
+
+00:00:04.010 --> 00:00:06.000 align:start position:0%
+next line
+last

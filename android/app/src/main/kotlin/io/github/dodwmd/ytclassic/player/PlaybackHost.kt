@@ -494,6 +494,9 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         load(positionSeconds(), q, auto = auto)
     }
 
+    /** Absolute position in milliseconds (media time, whatever the speed): what captions are looked up by. */
+    fun positionMs(): Long = if (finished) seek.totalSeconds * 1000 else seek.positionMs(exo.currentPosition)
+
     /** Absolute position in whole seconds. */
     fun positionSeconds(): Long = if (finished) seek.totalSeconds else seek.positionMs(exo.currentPosition) / 1000
 

@@ -18,6 +18,7 @@ import { TV_MIN_SUBS, MAX_SEEN_PARAM, TvLimiter, parseSeen, pickNext } from "./t
 import { DURATIONS, MAX_QUERY, SORTS, search, searchChannels } from "./yt/search.ts";
 import { clearSearches, listSearches, recordSearch, removeSearch } from "./searches.ts";
 import { MAX_SUGGEST_QUERY, suggest } from "./suggest.ts";
+import { subTracks, subVtt, SUB_LANG } from "./yt/subs.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { logSafe } from "./http.ts";
@@ -416,6 +417,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     }
     const offered = known ?? knownOffered(id);
     return json(res, 200, { qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered });
+  }
+
+  const sub = /^\/api\/video\/([\w-]{11})\/subs(?:\/([^/]+)\.vtt)?$/.exec(path);
+  if (sub) {
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+    if (!sub[2]) {
+      const pref = url.searchParams.get("pref") ?? "";
+      if (pref && (pref.length > 35 || !SUB_LANG.test(pref))) return json(res, 400, { error: "bad language" });
+      return json(res, 200, { tracks: await subTracks(sub[1], pref) }, { "cache-control": "private, max-age=300" });
+    }
+    if (!SUB_LANG.test(sub[2])) return json(res, 400, { error: "bad language" });
+    const vtt = await subVtt(sub[1], sub[2]);
+    return void res.writeHead(200, { "content-type": "text/vtt; charset=utf-8", "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" }).end(vtt);
   }
 
   if (path.startsWith("/api/video/")) {
