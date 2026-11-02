@@ -483,7 +483,23 @@ removes the notification whenever it goes to the background. Headset and Bluetoo
 service is alive: it is stopped after the video finishes, after you stop it, after an error in the background, and (with
 the setting off) whenever the app is in the background, so open the app and press Play again.
 
-**Not yet:** picture-in-picture, offline downloads, Play Store publishing.
+**Picture in picture:** a video that is playing shrinks into a small floating window when you press Home or switch apps
+(Android 12+ enters automatically; before that the app enters when you leave). The button next to Fullscreen (inline and
+fullscreen) does it on demand. The window shows only the video, shaped like it (default 16:9, clamped to the platform's
+1:2.39 to 2.39:1), with Play/Pause and, in TV mode, Skip buttons. Tap the window to expand: the same video continues at
+the same position, and fullscreen (and its landscape lock) is restored if it was on. Settings has **Picture in picture**
+(on by default; the switch is disabled with an explanation when the device lacks it or it is off for the app in system
+settings). **Upgrading:** it is on by default, so after updating, pressing Home during a playing video shrinks it into the
+window instead of just continuing as audio; turn **Picture in picture** off in Settings for the old behaviour. It only
+applies to a video that is actually playing (not paused, buffering a paused seek, finished or failed); otherwise leaving
+the app is an ordinary background. How it combines with the other settings: while the window is up the app counts as on
+screen, so nothing pauses and **Keep playing in the background** does not matter. Closing the window with X ends the
+video like any "stop": it pauses, the notification and (in TV mode) the TV session go away, and reopening the app offers
+Play where it left off, whatever the background setting says. A screen that turns off while the window is up is not a
+close: playback continues per the background setting. With picture in picture off, or unavailable
+(`FEATURE_PICTURE_IN_PICTURE`, or the system's per-app switch), leaving the app behaves as described under Background audio.
+
+**Not yet:** offline downloads, Play Store publishing.
 
 **Testing it without a phone:** the shell can add an emulator (needs KVM, about 2 GB more):
 

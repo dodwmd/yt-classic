@@ -21,6 +21,7 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import io.github.dodwmd.ytclassic.player.LocalPip
 import io.github.dodwmd.ytclassic.player.PlaybackHost
 import io.github.dodwmd.ytclassic.player.StreamPlayer
 
@@ -51,7 +52,7 @@ fun TvScreen(host: PlaybackHost, fullscreen: Boolean, onFullscreen: (Boolean) ->
                 onSkip = if (fullscreen) ({ host.skipTv() }) else null, // the buttons below do it otherwise
                 onStop = if (fullscreen) ({ host.stopTv(); onExit() }) else null,
             )
-            if (!fullscreen) {
+            if (!fullscreen && !LocalPip.current.inPip) {
                 Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                     Text("Now playing", style = MaterialTheme.typography.labelMedium, color = Muted)
                     Text(v.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
