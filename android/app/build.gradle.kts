@@ -17,6 +17,11 @@ android {
         versionName = "0.1.0"
     }
 
+    sourceSets {
+        // Fixtures shared with the backend and web tests (timestamp-links.json): one set of cases for every client.
+        getByName("test").resources.srcDir("../../backend/test-fixtures")
+    }
+
     buildFeatures {
         compose = true
         buildConfig = true

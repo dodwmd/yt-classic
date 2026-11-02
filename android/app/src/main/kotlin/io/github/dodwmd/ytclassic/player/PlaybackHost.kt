@@ -204,6 +204,9 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
      * Bumped wherever the inputs of [playIntent] (the player's playWhenReady, the pending restart and its wish) change,
      * so readers of [wantsToPlay] in a snapshot (the picture-in-picture parameters) are told about them.
      */
+    /** Counts restarts, so the UI can tell that a seek came from somewhere else. */
+    var loads by mutableIntStateOf(0)
+        private set
     private var intentVersion by mutableIntStateOf(0)
 
     /** Whether playback is meant to run: the pending restart's wish while one is pending, else the player's. */
@@ -501,6 +504,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
      */
     fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true, auto: Boolean = this.auto) {
         val v = video ?: return
+        loads++
         pendingPlay = play ?: playIntent
         intentVersion++
         quality = q

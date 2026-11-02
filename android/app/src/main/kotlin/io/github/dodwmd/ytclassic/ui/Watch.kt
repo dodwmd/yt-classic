@@ -15,6 +15,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.compose.ui.platform.LocalContext
+import io.github.dodwmd.ytclassic.App
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,7 +54,6 @@ import io.github.dodwmd.ytclassic.player.StreamPlayer
 import io.github.dodwmd.ytclassic.player.qualityPlan
 import io.github.dodwmd.ytclassic.player.screenShortSide
 import androidx.compose.ui.platform.LocalContext
-import io.github.dodwmd.ytclassic.App
 import kotlinx.coroutines.flow.first
 import io.github.dodwmd.ytclassic.player.withOffers
 import io.github.dodwmd.ytclassic.player.AUTO_QUALITY
@@ -88,6 +91,21 @@ fun WatchScreen(
         var commentsOpen by rememberSaveable(v.id) { mutableStateOf(false) }
         var commentsOrder by rememberSaveable(v.id) { mutableStateOf("top") }
         LaunchedEffect(commentsOpen, commentsOrder) { if (commentsOpen) comments.list(commentsOrder).loadFirst() }
+        // Chapters: the list is collapsed until opened; the current one is read from the player only while it is open.
+        var chaptersOpen by rememberSaveable(v.id) { mutableStateOf(false) }
+        var nowSec by remember(v.id) { mutableLongStateOf(0L) }
+        val host = (LocalContext.current.applicationContext as App).host
+        val lifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+        LaunchedEffect(chaptersOpen, v.id) { // no polling while the app is in the background
+            if (chaptersOpen) lifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.STARTED) {
+                while (true) {
+                    if (host.video?.id == v.id) nowSec = host.positionSeconds()
+                    kotlinx.coroutines.delay(1000)
+                }
+            }
+        }
+        // Timestamp and chapter taps restart the stream through the host, like the seek bar does.
+        val seekTo = { t: Long -> if (host.video?.id == v.id) { host.load(t); nowSec = t } }
         val later = rememberLater(api, (listOf(v.id) + r.related.items.map { it.id }).distinct())
         // In picture-in-picture only the player shows, so never the two-pane layout.
         val inPip = LocalPip.current.inPip
@@ -122,6 +140,7 @@ fun WatchScreen(
         val onVideoNow by rememberUpdatedState(onVideo)
         val onChannelNow by rememberUpdatedState(onChannel)
         val laterNow by rememberUpdatedState(later)
+        val seekToNow by rememberUpdatedState(seekTo)
         val listState = rememberLazyListState()
         val player = remember(v.id) {
             movableContentOf {
@@ -131,7 +150,7 @@ fun WatchScreen(
                 if (showPlayer(cur.playable, cur.reason, override)) {
                     StreamPlayer(
                         cur.video, planNow.quality, planNow.chips, cur.lang, begin, onPosition = { resume[0] = it },
-                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto, screenHeight = planNow.screen,
+                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto, screenHeight = planNow.screen, chapters = cur.chapters,
                     )
                 } else {
                     Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
@@ -157,12 +176,13 @@ fun WatchScreen(
                             )
                             if (video.description.isNotBlank()) {
                                 Text(
-                                    video.description, color = Muted, maxLines = if (expanded) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis,
+                                    linkedDescription(video.description, video.durationSeconds ?: 0L, showPlayer(cur.playable, cur.reason, override), seekToNow), color = Muted, maxLines = if (expanded) Int.MAX_VALUE else 3, overflow = TextOverflow.Ellipsis,
                                     modifier = Modifier.clickable { expanded = !expanded },
                                 )
                             }
                         }
                     }
+                    chaptersSection(if (showPlayer(cur.playable, cur.reason, override)) cur.chapters else emptyList(), chaptersOpen, { chaptersOpen = !chaptersOpen }, nowSec, seekToNow)
                     // commentsOpen/commentsOrder are state delegates captured here, so this long-lived lambda always reads the current values.
                     commentsSection(comments, video.commentCount?.toLongOrNull(), commentsOpen, { commentsOpen = it }, commentsOrder, { commentsOrder = it })
                     if (cur.related.items.isNotEmpty()) item { SectionTitle(cur.related.heading.ifBlank { "Related videos" }) }

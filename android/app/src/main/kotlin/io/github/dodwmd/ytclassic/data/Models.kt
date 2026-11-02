@@ -209,6 +209,8 @@ data class VideoResponse(
     val tiersKnown: Boolean = true,
     val lang: String = "",
     val progress: Progress? = null,
+    /** Chapters parsed by the server from the description; empty when there are none. */
+    @Serializable(with = LenientChapters::class) val chapters: List<Chapter> = emptyList(),
     /** False only when the server already knows the video can't be played; [reason] is the error code, [message] the explanation. */
     val playable: Boolean = true,
     val reason: String? = null,

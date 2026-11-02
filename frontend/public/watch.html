@@ -31,6 +31,7 @@
           <button class="pp" type="button" aria-label="Play or pause">&#9654;</button>
           <input class="bar" type="range" aria-label="Seek" min="0" max="0" step="1" value="0">
           <span class="time"></span>
+          <span class="chap" id="ch-name"></span>
           <input class="vol" type="range" aria-label="Volume" min="0" max="1" step="0.05" value="1">
           <button class="fs" type="button" aria-label="Fullscreen">&#9974;</button>
         </div>
@@ -40,6 +41,7 @@
         <div class="by">Uploaded by <a id="chan"></a> <span id="age"></span></div>
         <div class="views" id="views"></div>
       </div>
+      <details id="chapters" hidden><summary id="ch-sum">Chapters</summary><ol id="ch-list" role="list"></ol></details>
       <details open><summary>Description</summary><div class="desc" id="desc"></div></details>
       <section id="comments">
         <button id="cm-open" type="button" aria-expanded="false" aria-controls="cm-body">Show comments</button> <span id="cm-fail" role="status"></span>

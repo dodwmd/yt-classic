@@ -26,6 +26,19 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   kept in the database; page tokens must match `[A-Za-z0-9_-]{1,120}`.
   `GET /api/channel/:id/playlists`, `/playlist/:playlistId` (only playlists owned by that channel), `/shorts`, `/live`
   (all take `?pageToken=`) and `/about`.
+- **Chapters and clickable timestamps.** `GET /api/video/:id` adds `chapters: [{start, end, title}]` (seconds; omitted when there are none),
+  parsed server-side from the description, which is already fetched, so it costs no extra API units. The rule is YouTube's: a run of
+  lines that each start with a timestamp (`0:00 Intro`, `1:02:03 - Title`, `(2:15) Title`, `[01:02] Title`, optionally after a bullet or
+  emoji), starting at `0:00`, strictly ascending, at least 3 entries; a non-timestamp line ends the run, blank lines do not; entries at or
+  after the duration are dropped; titles are plain text of at most 100 characters; at most 100 chapters; `end` is the next start (the
+  duration for the last). The matching is linear time (bounded prefix, no nested quantifiers). **Linking rule for clients:** in the
+  description, any `h:mm:ss` or `m:ss` (`(?<![\w:/.@#?=&%])(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?!\w|:\d|[/.]\w)`, seconds < 60, minutes < 60
+  when hours are present) that is not part of a URL or longer token and is before the duration becomes a seek link (so `1:30-2:00` links both ends); comments stay plain
+  text. The web and Android linkers share one set of cases (`backend/test-fixtures/timestamp-links.json`, run by both test suites); the backend list parser is a stricter variant of the same rule (it also needs a title and the run rules above), and Android uses the server's `chapters` for the list and its own linker only for in-text links. Web: the lazily loaded `chapters.js` (only fetched when the video has chapters or timestamps) makes the links, adds a collapsed
+  "Chapters (N)" list with the current chapter highlighted, shows the current chapter's name in the control bar (hidden in landscape
+  phones) and binds `[` / `]` to the previous / next chapter; there are no seek-bar ticks on the web. Android: timestamps are underlined links (TalkBack lists them; not styled as links when the video can't be played), a collapsed "Chapters (N)" row expands to tappable rows with the current one marked, the chapter name shows under the
+  controls (also fullscreen; not in picture-in-picture, where there are no controls) and ticks are drawn under the seek slider. Taps
+  restart the stream at that second, like the seek bar. Web timestamp links are real `/watch?v=ID&t=N` links (new tab and copy-link work; a plain click seeks in place), and chapter seeks are limited to one per 300 ms.
 - **Comments** (read-only; web: a collapsed "Show comments (N)" section on the watch page, Android: a "Show comments" row on
   the Watch screen). Nothing is requested, and on the web no comment code is downloaded, until it is opened. Top/Newest,
   "Load more" (20 a page) and per-comment "Show N replies" (loaded on demand). Comments are shown as plain text (the API is asked for
@@ -802,7 +815,7 @@ backend/
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look; follows the system light/dark setting
-  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar), speed (lazy: speed and double-tap seek)
+  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar), speed (lazy: speed and double-tap seek), chapters (lazy: timestamp links and chapter list)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
   05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line
