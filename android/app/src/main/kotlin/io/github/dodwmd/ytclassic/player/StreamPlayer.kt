@@ -212,8 +212,17 @@ fun StreamPlayer(
     var tiles by remember(video.id) { mutableStateOf<Tiles?>(null) }
     val dragRect = dragging?.let { d -> tiles?.locate(d) }
     var sheet by remember(video.id) { mutableStateOf<Pair<Int, ImageBitmap>?>(null) }
-    LaunchedEffect(scrub, dragging != null && total > 0) { if (dragging != null && total > 0) tiles = scrub.load() }
-    LaunchedEffect(scrub, dragRect?.sheet) { dragRect?.let { r -> scrub.sheet(r.sheet)?.let { sheet = r.sheet to it } } }
+    DisposableEffect(scrub) { onDispose { scrub.close() } }
+    val isDragging = dragging != null && total > 0
+    LaunchedEffect(scrub, isDragging) {
+        if (isDragging) tiles = scrub.load()
+        else { tiles = null; sheet = null } // a finished drag leaves no stale tile for the next one
+    }
+    LaunchedEffect(scrub, dragRect?.sheet) {
+        val r = dragRect ?: return@LaunchedEffect
+        scrub.sheet(r.sheet)?.let { sheet = r.sheet to it }
+        scrub.prefetch(r.sheet + 1) // the neighbour, so crossing a sheet boundary has it ready
+    }
     val fontScale = LocalDensity.current.fontScale
     val transport: @Composable () -> Unit = {
       // The row's real width decides what fits (a two-pane layout gives the player only part of the screen).
@@ -265,8 +274,7 @@ fun StreamPlayer(
                 val at = dragging
                 if (at != null && dragRect != null && tiles != null && !pip.inPip) {
                     val t = at.toLong()
-                    val label = formatSeconds(t) + (chapters.getOrNull(chapterIndexAt(chapters, t))?.title?.let { " $it" } ?: "")
-                    ScrubBubble(tiles!!, dragRect, sheet?.takeIf { it.first == dragRect.sheet }?.second, at / total, label, with(LocalDensity.current) { SLIDER_THUMB.width.toPx().roundToInt() / 2 })
+                    ScrubBubble(tiles!!, dragRect, sheet?.takeIf { it.first == dragRect.sheet }?.second, at / total, formatSeconds(t), chapters.getOrNull(chapterIndexAt(chapters, t))?.title, with(LocalDensity.current) { SLIDER_THUMB.width.toPx().roundToInt() / 2 })
                 }
               }
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, maxLines = 1, softWrap = false, modifier = Modifier.padding(horizontal = 8.dp))

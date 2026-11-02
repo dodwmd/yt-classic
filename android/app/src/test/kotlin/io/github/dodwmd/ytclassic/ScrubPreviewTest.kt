@@ -11,9 +11,11 @@ import io.github.dodwmd.ytclassic.data.Tiles
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.bubbleLeft
 import io.github.dodwmd.ytclassic.data.locate
+import io.github.dodwmd.ytclassic.data.sampleSizeFor
 import io.github.dodwmd.ytclassic.data.usable
 import io.github.dodwmd.ytclassic.player.ScrubPreview
 import io.github.dodwmd.ytclassic.player.StoryboardSource
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
 import kotlin.test.AfterTest
@@ -37,7 +39,7 @@ class ScrubPreviewTest {
     fun descriptorFromTheBackendParses() {
         assertEquals(Tiles(320, 180, 3, 3, 108, 1.972, 12), tiles)
         assertTrue(tiles.usable())
-        for (bad in listOf(Tiles(), tiles.copy(count = 0), tiles.copy(interval = 0.0), tiles.copy(interval = Double.NaN), tiles.copy(cols = 0), tiles.copy(sheets = 0), tiles.copy(w = -1))) assertFalse(bad.usable(), bad.toString())
+        for (bad in listOf(Tiles(), tiles.copy(count = 0), tiles.copy(interval = 0.0), tiles.copy(interval = Double.NaN), tiles.copy(cols = 0), tiles.copy(sheets = 0), tiles.copy(w = -1), tiles.copy(sheets = 2), tiles.copy(sheets = 13), tiles.copy(count = 109))) assertFalse(bad.usable(), bad.toString())
         assertFalse(ApiJson.decodeFromString<Storyboard>("{}").tiles.usable())
     }
 
@@ -98,12 +100,13 @@ class ScrubPreviewTest {
 
     private class FakeSource(var board: Storyboard? = null, var fail: Boolean = false) : StoryboardSource {
         var boards = 0
-        val sheets = mutableListOf<Int>()
+        val sheets = java.util.concurrent.CopyOnWriteArrayList<Int>()
         override suspend fun storyboard(videoId: String): Storyboard? { boards++; if (fail) throw ApiException("down"); return board }
         override suspend fun sheet(videoId: String, n: Int): ByteArray { sheets += n; if (fail) throw java.io.IOException("down"); return ByteArray(10) { n.toByte() } }
     }
 
-    private fun preview(src: FakeSource, bytes: Long = 1000) = ScrubPreview<ByteArray>("AAAAAAAAAAA", src, decode = { if (it.isEmpty()) null else it }, sizeOf = { it.size.toLong() }, cacheBytes = bytes)
+    private fun preview(src: FakeSource, bytes: Long = 1000, decode: (ByteArray, Tiles) -> ByteArray? = { b, _ -> if (b.isEmpty()) null else b }) =
+        ScrubPreview("AAAAAAAAAAA", src, decode = decode, sizeOf = { it.size.toLong() }, cacheBytes = bytes)
 
     @Test
     fun descriptorIsAskedOnceAndMissingStoryboardsAreRemembered() = runBlocking {
@@ -137,6 +140,7 @@ class ScrubPreviewTest {
     fun sheetsAreFetchedOnceAndKeptWithinTheByteBound() = runBlocking {
         val src = FakeSource(Storyboard(tiles, 213.0))
         val p = preview(src, bytes = 25) // two 10-byte sheets fit
+        p.load()
         val a = p.sheet(0)!!
         assertSame(a, p.sheet(0))
         p.sheet(1)
@@ -148,8 +152,94 @@ class ScrubPreviewTest {
         assertNull(p.sheet(5), "a failing sheet is no preview, not a crash")
     }
 
+    @Test
+    fun sheetsAreDecodedOffTheCallersThread() = runBlocking {
+        val src = FakeSource(Storyboard(tiles, 213.0))
+        val threads = java.util.concurrent.CopyOnWriteArrayList<Thread>()
+        val p = preview(src, decode = { b, _ -> threads += Thread.currentThread(); b })
+        p.load()
+        p.sheet(0)
+        assertEquals(1, threads.size)
+        assertTrue(threads[0] !== Thread.currentThread(), "decoding runs on a worker thread")
+    }
+
+    @Test
+    fun aDecoderThatFailsOrRefusesIsNoPreviewNotACrash() = runBlocking {
+        val src = FakeSource(Storyboard(tiles, 213.0))
+        for (decode in listOf<(ByteArray, Tiles) -> ByteArray?>({ _, _ -> null }, { _, _ -> throw IllegalArgumentException("bad image") }, { _, _ -> throw OutOfMemoryError() })) {
+            val p = preview(src, decode = decode)
+            p.load()
+            assertNull(p.sheet(1))
+        }
+        val big = preview(src)
+        big.load()
+        assertEquals(10, big.sheet(2)?.size, "the same source still decodes with a working decoder")
+    }
+
+    @Test
+    fun anOutOfRangeOrUnloadedSheetIsNull() = runBlocking {
+        val src = FakeSource(Storyboard(tiles, 213.0))
+        val p = preview(src)
+        assertNull(p.sheet(0), "before the descriptor is loaded")
+        p.load()
+        assertNull(p.sheet(12))
+        assertNull(p.sheet(-1))
+        assertTrue(src.sheets.isEmpty())
+    }
+
+    @Test
+    fun aCallerThatLeavesDoesNotCancelTheFetchAndTheNextOneJoinsIt() = runBlocking {
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val src = object : StoryboardSource {
+            val calls = java.util.concurrent.atomic.AtomicInteger()
+            override suspend fun storyboard(videoId: String) = Storyboard(tiles, 213.0)
+            override suspend fun sheet(videoId: String, n: Int): ByteArray { calls.incrementAndGet(); gate.await(); return ByteArray(10) }
+        }
+        val p = ScrubPreview<ByteArray>("AAAAAAAAAAA", src, decode = { b, _ -> b }, sizeOf = { it.size.toLong() })
+        p.load()
+        val first = async(kotlinx.coroutines.Dispatchers.Default) { p.sheet(3) }
+        while (src.calls.get() == 0) kotlinx.coroutines.delay(5)
+        first.cancel() // the drag moved on
+        assertFailsWith<kotlinx.coroutines.CancellationException> { first.await() }
+        val second = async(kotlinx.coroutines.Dispatchers.Default) { p.sheet(3) }
+        gate.complete(Unit)
+        assertEquals(10, second.await()?.size)
+        assertEquals(1, src.calls.get(), "one download for both callers")
+        p.close()
+    }
+
+    @Test
+    fun closingStopsFetchesAndPrefetchWarmsTheNeighbour() = runBlocking {
+        val src = FakeSource(Storyboard(tiles, 213.0))
+        val p = preview(src)
+        p.load()
+        p.prefetch(4)
+        p.prefetch(99) // not a sheet: ignored
+        val t0 = System.currentTimeMillis()
+        while (src.sheets.isEmpty() && System.currentTimeMillis() - t0 < 5000) kotlinx.coroutines.delay(10)
+        assertEquals(listOf(4), src.sheets.toList())
+        assertEquals(10, p.sheet(4)?.size)
+        assertEquals(listOf(4), src.sheets.toList(), "the prefetched sheet is served from the cache")
+        p.close()
+    }
+
+    @Test
+    fun sampleSizeRefusesHugeSheetsAndShrinksBigOnes() {
+        assertEquals(1, sampleSizeFor(960, 540, 320))
+        assertNull(sampleSizeFor(5000, 100, 320), "a side over 4096")
+        assertNull(sampleSizeFor(0, 100, 320))
+        assertNull(sampleSizeFor(100, 100, 0))
+        // 4096x4096 RGB_565 is 32 MB: shrunk until it is within 8 MB
+        assertEquals(2, sampleSizeFor(4096, 4096, 640, minTileWidth = 10_000))
+        assertEquals(1, sampleSizeFor(4096, 1024, 640, minTileWidth = 10_000), "4096x1024 at 2 bytes is exactly 8 MB")
+        assertNull(sampleSizeFor(4096, 4096, 1, minTileWidth = 10_000), "a tile that could not survive the shrinking")
+        // oversized tiles are also sampled for display: 1280-px tiles with a 320-px floor
+        assertEquals(4, sampleSizeFor(3840, 2160, 1280))
+        assertEquals(1, sampleSizeFor(960, 540, 320), "never below the floor")
+    }
+
     private lateinit var server: HttpServer
-    private val seen = mutableListOf<String>()
+    private val seen = java.util.concurrent.CopyOnWriteArrayList<String>()
 
     @BeforeTest
     fun start() {
@@ -162,11 +252,14 @@ class ScrubPreviewTest {
                 "/api/video/AAAAAAAAAAA/storyboard/5.jpg" -> Triple(200, "image/jpeg", byteArrayOf(9, 8, 7))
                 "/api/video/AAAAAAAAAAA/storyboard/6.jpg" -> Triple(200, "image/jpeg", ByteArray(2 * 1024 * 1024 + 1))
                 "/api/video/AAAAAAAAAAA/storyboard/4.jpg" -> Triple(200, "image/jpeg", ByteArray(2 * 1024 * 1024 + 1))
+                "/api/video/AAAAAAAAAAA/storyboard/7.jpg" -> Triple(401, "application/json", """{"error":"unauthorized"}""".toByteArray())
+                "/api/video/AAAAAAAAAAA/storyboard/8.jpg" -> Triple(200, "image/jpeg", java.io.ByteArrayOutputStream().also { o -> java.util.zip.GZIPOutputStream(o).use { it.write(byteArrayOf(5, 4, 3, 2)) } }.toByteArray())
                 "/api/video/CCCCCCCCCCC/storyboard" -> Triple(401, "application/json", """{"error":"unauthorized"}""".toByteArray())
                 else -> Triple(404, "application/json", res("storyboard-none.json").toByteArray())
             }
             ex.responseHeaders.add("Content-Type", type)
-            ex.sendResponseHeaders(status, if (ex.requestURI.path.let { it.endsWith("/5.jpg") || it.endsWith("/6.jpg") }) 0 else body.size.toLong()) // 0 = chunked
+            if (ex.requestURI.path.endsWith("/8.jpg")) ex.responseHeaders.add("Content-Encoding", "gzip")
+            ex.sendResponseHeaders(status, if (ex.requestURI.path.let { it.endsWith("/5.jpg") || it.endsWith("/6.jpg") || it.endsWith("/8.jpg") }) 0 else body.size.toLong()) // 0 = chunked
             ex.responseBody.use { it.write(body) }
         }
         server.start()
@@ -192,6 +285,16 @@ class ScrubPreviewTest {
         val e = assertFailsWith<ApiException> { runBlocking { api().storyboardSheet("BBBBBBBBBBB", 0) } }
         assertEquals("no-storyboard", e.code)
         assertFailsWith<AuthException> { runBlocking { api().storyboard("CCCCCCCCCCC") } }
+    }
+
+    @Test
+    fun aRejectedTokenOnTheSheetPathIsAnAuthException() {
+        assertFailsWith<AuthException> { runBlocking { api("wrong").storyboardSheet("AAAAAAAAAAA", 7) } }
+    }
+
+    @Test
+    fun aGzippedSheetWithoutALengthIsDecodedAndBounded() {
+        assertContentEquals(byteArrayOf(5, 4, 3, 2), runBlocking { api().storyboardSheet("AAAAAAAAAAA", 8) })
     }
 
     @Test

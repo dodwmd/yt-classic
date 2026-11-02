@@ -106,16 +106,17 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   (tile size in px, tiles per sheet, tiles in all, seconds per tile, number of sheets) and `GET /api/video/:id/storyboard/:n.jpg` is sheet
   `n` (`0 <= n < sheets`, otherwise `404`). Both come from one yt-dlp metadata call per video (its own single slot, separate from playback,
   search and subtitles; a hung run is killed after 30 s, a failure is remembered for 30 s). The level is the widest tile up to 320 px
-  (at least 100 px) that needs at most 40 sheets, so a long video gets a narrower level rather than hundreds of sheets; only levels whose
-  sheets are full grids are used (clients map time to a tile by arithmetic). The descriptor is cached for an hour (none: 10 minutes) and only
+  (at least 100 px) that needs at most 40 sheets, so a long video gets a narrower level rather than hundreds of sheets; a level is used only if every sheet but the
+  last is a full grid (the last may be short; clients map time to a tile by arithmetic), and if no level fits the limit the narrowest
+  usable one is still used, even with more than 40 sheets. The descriptor is cached for an hour (none: 10 minutes) and only
   it is persisted; the upstream URLs stay in memory, are never sent to a client or logged, and a sheet can only be asked for through the
   video id and the index. A sheet is fetched over https from `ytimg.com`, `googlevideo.com` or `ggpht.com` (the exact name or a subdomain, no
   port, no credentials), without redirects, with a 10 s timeout, a 1.5 MB cap enforced while reading, and only if it is a JPEG, WebP or PNG;
-  an expired URL (403/410) is refreshed once. Sheets are kept in a 16 MB in-memory LRU and concurrent requests for a sheet share one download.
+  an expired URL (403/410) is refreshed once. Sheets are kept in a 16 MB in-memory LRU evicted least recently used first and after an hour, and concurrent requests for a sheet share one download. At most 4 sheets download at once with a short queue; beyond it the answer is `503` `busy`, and when fresh URLs are also refused (403/410) the video fails fast for 30 s. The web proxy rate-limits these URLs (600 requests a minute per client, burst 60). A sheet path that is not `<number>.jpg` answers `400`.
   A video without a storyboard answers `404` `no-storyboard`. Web: `previews.js` is loaded lazily on the first pointer over the seek bar
   (mouse hover, pen or touch drag) and shows a tile with the time (and the chapter name, when the video has chapters) above the pointer; it
   is `aria-hidden` and leaves the slider's keyboard use alone. Android: while you drag the seek bar a bubble above the thumb shows the tile
-  cropped from the decoded sheet (fetched with the access token, at most 8 MB of decoded sheets kept) with the time and chapter title, inline and in
+  cropped from the decoded sheet (fetched with the access token and decoded off the main thread as RGB_565; images over 4096 px a side are refused, big ones sampled down; at most 8 MB of decoded sheets kept; the next sheet is prefetched) with the time and chapter title, inline and in
   fullscreen, and never in picture-in-picture; TalkBack hears the slider's own time announcement, not the bubble.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).

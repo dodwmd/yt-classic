@@ -128,7 +128,7 @@ test("chapter names join the label when the video has chapters", async () => {
   c.bar.fire("pointermove", { clientX: 350 });
   assert.equal(c.lab.textContent, "1:46 Main part");
   c.bar.fire("pointermove", { clientX: 160 });
-  assert.equal(c.lab.textContent, "0:05 Intro");
+  assert.equal(c.lab.textContent, "0:01 Intro", "the track starts a thumb radius in from the bar edge");
 });
 
 test("no storyboard (404) means never showing and never asking again; other failures are retried on the next hover", async () => {
@@ -165,6 +165,24 @@ test("a malformed descriptor and a missing duration show nothing", async () => {
   const e = setup("/stream/not-an-id");
   assert.equal(calls.length, 0, "no request without a valid video id");
   assert.equal(e.pv.hidden, true);
+});
+
+test("a new video while the pointer stays on the bar: the old tile goes and the new descriptor is fetched", async () => {
+  reply = () => ({ status: 200, body: { tiles: TILES } });
+  const c = setup();
+  await tick();
+  c.bar.fire("pointermove", { clientX: 350 });
+  assert.equal(c.pv.hidden, false);
+  c.root.dataset.src = "/stream/CCCCCCCCCCC?q=720";
+  c.bar.fire("pointermove", { clientX: 351 });
+  assert.equal(c.pv.hidden, true, "the previous video's tile is not left showing");
+  assert.equal(calls.at(-1), "/api/video/CCCCCCCCCCC/storyboard", "no hover needed to look the new one up");
+  await tick();
+  c.bar.fire("pointermove", { clientX: 352 });
+  assert.equal(c.pv.hidden, false);
+  assert.equal(calls.length, 2, "one request per video, not per move");
+  c.bar.fire("pointercancel");
+  assert.equal(c.pv.hidden, true);
 });
 
 test("a new video in the same player (TV) uses its own descriptor", async () => {

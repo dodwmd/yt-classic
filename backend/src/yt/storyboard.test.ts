@@ -8,8 +8,8 @@ import { join } from "node:path";
 import { createApp } from "../app.ts";
 import { clearCache, forget } from "../cache.ts";
 import { classifyError, errorBody, NoStoryboard } from "../errors.ts";
-import { killChildren } from "./dlp.ts";
-import { MAX_SHEET_BYTES, allowedSheetUrl, parseStoryboards, resetStoryboards } from "./storyboard.ts";
+import { clearFailures, killChildren } from "./dlp.ts";
+import { MAX_SHEET_BYTES, SHEET_CACHE_BYTES, allowedSheetUrl, parseStoryboards, resetStoryboards, setSheetCacheBytes, sheetCacheBytes } from "./storyboard.ts";
 
 const VID = "AAAAAAAAAAA";
 const NONE = "BBBBBBBBBBB";
@@ -64,6 +64,7 @@ const realFetch = globalThis.fetch;
 const realErr = console.error;
 const realLog = console.log;
 let fetched: string[] = [];
+let gate: Promise<void> | null = null;
 let mode: "ok" | "big" | "bigdeclared" | "html" | "404" | "429" | "reject" | "403" | "403once" | "stall" | "webp" = "ok";
 
 before(async () => {
@@ -92,6 +93,7 @@ esac
     fetched.push(u);
     assert.equal(init?.redirect, "error", "redirects are refused");
     const img = { "content-type": "image/jpeg" };
+    if (gate) await gate;
     if (mode === "reject") throw Object.assign(new TypeError("fetch failed"), { cause: { code: "ECONNRESET" } });
     if (mode === "403") return new Response("", { status: 403 });
     if (mode === "403once") {
@@ -130,6 +132,9 @@ beforeEach(() => {
   clearCache();
   for (const id of [VID, NONE, "EEEEEEEEEEE"]) forget(`sbdesc:${id}`); // the persisted descriptors survive clearCache()
   resetStoryboards();
+  setSheetCacheBytes();
+  clearFailures();
+  gate = null;
   fetched = [];
   mode = "ok";
   rmSync(join(tmp, "calls"), { force: true });
@@ -193,7 +198,6 @@ test("n must be an integer inside [0, sheets)", async () => {
     assert.equal(JSON.parse(r.text).code, "no-storyboard");
   }
   for (const bad of ["-1", "1.5", "x", "01x", "%2e%2e", "10000", ""]) assert.ok((await call(`/api/video/${VID}/storyboard/${bad}.jpg`)).status >= 400, bad);
-  assert.equal((await call(`/api/video/${VID}/storyboard/0.png`)).status, 400);
   assert.equal(fetched.length, 1, "only the valid request fetched");
 });
 
@@ -247,6 +251,7 @@ test("an expired sheet URL (403) is refreshed once through yt-dlp; a persistent 
   assert.equal((await call(`/api/video/${VID}/storyboard/1.jpg`)).status, 200);
   assert.equal(callCount(), 2);
   resetStoryboards();
+  clearFailures();
   mode = "403";
   assert.equal((await call(`/api/video/${VID}/storyboard/2.jpg`)).status, 502);
   assert.equal(callCount(), 3, "one refresh only");
@@ -259,10 +264,75 @@ test("concurrent requests for one sheet share a single download", async () => {
   assert.equal(callCount(), 1);
 });
 
-test("the sheet cache is bounded by bytes (oldest out first)", async () => {
-  // 12 sheets of ~2 KB fit; this only checks eviction does not break serving after many distinct sheets.
-  for (let n = 0; n < 12; n++) assert.equal((await call(`/api/video/${VID}/storyboard/${n}.jpg`)).status, 200);
-  assert.equal(fetched.length, 12);
+test("the sheet cache is bounded by bytes: least recently used out first, the counter stays exact", async () => {
+  assert.equal(SHEET_CACHE_BYTES, 16 * 1024 * 1024);
+  const size = JPEG.length;
+  setSheetCacheBytes(size * 3 + 10); // room for three sheets
+  for (const n of [0, 1, 2]) await call(`/api/video/${VID}/storyboard/${n}.jpg`);
+  assert.equal(sheetCacheBytes(), size * 3);
+  await call(`/api/video/${VID}/storyboard/0.jpg`); // a hit: 0 is now the most recently used
+  assert.equal(fetched.length, 3);
+  await call(`/api/video/${VID}/storyboard/3.jpg`); // evicts 1, the least recently used
+  assert.equal(sheetCacheBytes(), size * 3, "one out, one in");
+  fetched = [];
+  await call(`/api/video/${VID}/storyboard/0.jpg`);
+  await call(`/api/video/${VID}/storyboard/2.jpg`);
+  await call(`/api/video/${VID}/storyboard/3.jpg`);
+  assert.equal(fetched.length, 0, "0, 2 and 3 are still held");
+  await call(`/api/video/${VID}/storyboard/1.jpg`);
+  assert.equal(fetched.length, 1, "1 was evicted");
+  assert.equal(sheetCacheBytes(), size * 3);
+  setSheetCacheBytes(size - 1); // smaller than one sheet: nothing is kept
+  resetStoryboards();
+  assert.equal(sheetCacheBytes(), 0);
+  await call(`/api/video/${VID}/storyboard/0.jpg`);
+  assert.equal(sheetCacheBytes(), 0, "a sheet over the whole bound is not kept");
+});
+
+test("sheets expire after an hour (fake clock)", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: Date.now() });
+  await call(`/api/video/${VID}/storyboard/0.jpg`);
+  t.mock.timers.tick(59 * 60_000);
+  await call(`/api/video/${VID}/storyboard/0.jpg`);
+  assert.equal(fetched.length, 1);
+  t.mock.timers.tick(2 * 60_000);
+  await call(`/api/video/${VID}/storyboard/0.jpg`);
+  assert.equal(fetched.length, 2);
+  assert.equal(sheetCacheBytes(), JPEG.length, "the expired one was replaced, not double counted");
+});
+
+test("downloads are limited: four at a time, a short queue, then 503 busy; the rest succeed", async () => {
+  let open!: () => void;
+  gate = new Promise<void>((r) => (open = r));
+  await call(`/api/video/${VID}/storyboard`); // the descriptor first, so the 12 sheet requests only wait on downloads
+  const rs = Array.from({ length: 12 }, (_, n) => call(`/api/video/${VID}/storyboard/${n}.jpg`));
+  const t0 = Date.now();
+  while (fetched.length < 4 && Date.now() - t0 < 5000) await new Promise((r) => setTimeout(r, 20));
+  await new Promise((r) => setTimeout(r, 300)); // the rest have queued or been refused by now
+  open();
+  const done = await Promise.all(rs);
+  const statuses = done.map((r) => r.status);
+  assert.equal(statuses.filter((s) => s === 503).length, 4, statuses.join()); // 4 downloading + 4 queued, the other 4 refused
+  assert.equal(statuses.filter((s) => s === 200).length, 8, statuses.join());
+  const busy = done.find((r) => r.status === 503)!;
+  assert.equal(JSON.parse(busy.text).code, "busy");
+  assert.equal(busy.headers["retry-after"], "5");
+});
+
+test("an unknown sheet path is 400 bad sheet number without running yt-dlp", async () => {
+  for (const p of ["x", "1", "1.png", "-1.jpg", "10000.jpg", "", "1.jpg.jpg"]) {
+    const r = await call(`/api/video/${VID}/storyboard/${p}`);
+    assert.equal(r.status, 400, `${p} ${r.text}`);
+    assert.equal(JSON.parse(r.text).error, "bad sheet number", p);
+  }
+  assert.equal(callCount(), 0);
+});
+
+test("persistent 403s: yt-dlp is asked for fresh URLs once per 30 s per video, then requests fail fast", async () => {
+  mode = "403";
+  for (const n of [1, 2, 3, 4]) assert.equal((await call(`/api/video/${VID}/storyboard/${n}.jpg`)).status, 502);
+  assert.equal(callCount(), 2, "one descriptor run and one refresh, not one per request");
+  assert.equal(fetched.length, 2, "after the refresh also failed, no more downloads for a while");
 });
 
 test("a failing yt-dlp is classified and spawned once for repeats", async () => {

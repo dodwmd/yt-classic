@@ -32,11 +32,18 @@ export const MAX_SHEET_BYTES = 1_500_000;
 export const MAX_SHEETS = 400;
 const TTL = 60 * 60_000;
 const NEGATIVE_TTL = 10 * 60_000;
-const SHEET_CACHE_BYTES = 16 * 1024 * 1024;
+export const SHEET_CACHE_BYTES = 16 * 1024 * 1024;
+let cacheLimit = SHEET_CACHE_BYTES;
+/** Test hook: the byte bound of the sheet cache (undefined restores the default). */
+export const setSheetCacheBytes = (n?: number) => void (cacheLimit = n ?? SHEET_CACHE_BYTES);
+/** Bytes held by the sheet cache (for tests and diagnostics). */
+export const sheetCacheBytes = () => sheetBytes;
 const TYPES = /^image\/(jpeg|webp|png)$/;
 
 /** Storyboards have their own yt-dlp slot: they can never take the ones playback, search or subtitles need. */
 export const sbSlots = limiter(1, 4);
+/** Sheet downloads (up to 1.5 MB each) are few at a time with a short queue; beyond it the answer is 503 busy. */
+export const sheetSlots = limiter(4, 4);
 const ytdlpMs = () => envInt("STORYBOARD_YTDLP_TIMEOUT_MS", 30_000);
 const fetchMs = () => envInt("STORYBOARD_FETCH_TIMEOUT_MS", 10_000);
 
@@ -172,7 +179,7 @@ async function download(url: string): Promise<{ type: string; body: Buffer }> {
   return { type, body: Buffer.concat(chunks) };
 }
 
-// Recent sheets, bounded by total bytes (oldest out first); concurrent requests for one sheet share one download.
+// Recent sheets, bounded by total bytes and age (least recently used out first); concurrent requests for one sheet share one download.
 type Sheet = { type: string; body: Buffer };
 const sheets = new Map<string, { exp: number; sheet: Sheet }>();
 const inflight = new Map<string, Promise<Sheet>>();
@@ -184,7 +191,7 @@ function remember(key: string, sheet: Sheet): void {
   sheets.set(key, { exp: Date.now() + TTL, sheet });
   sheetBytes += sheet.body.length;
   for (const [k, v] of sheets) {
-    if (sheetBytes <= SHEET_CACHE_BYTES) break;
+    if (sheetBytes <= cacheLimit) break;
     sheets.delete(k);
     sheetBytes -= v.sheet.body.length;
   }
@@ -195,13 +202,19 @@ async function fetchSheet(id: string, n: number, retry: boolean): Promise<Sheet>
   const url = i.urls[n];
   const u = url && allowedSheetUrl(url);
   if (!u) throw new NoStoryboard();
+  const dead = recentFailure(`sbdead:${id}`);
+  if (dead) throw dead.err; // fresh URLs were refused too, a moment ago: don't download or ask yt-dlp again yet
   try {
-    return await download(u.href);
+    return await sheetSlots.run(() => download(u.href));
   } catch (e) {
-    // A cached URL that has expired: ask yt-dlp again, once.
-    if (retry && e instanceof UpstreamError && (e.status === 403 || e.status === 410)) {
-      forget(`sb:${id}`);
-      return fetchSheet(id, n, false);
+    if (e instanceof UpstreamError && (e.status === 403 || e.status === 410)) {
+      // A cached URL that has expired: ask yt-dlp again, once (and not more than once per 30 s per video).
+      if (retry && !recentFailure(`sbfresh:${id}`)) {
+        recordFailure(`sbfresh:${id}`, e);
+        forget(`sb:${id}`);
+        return fetchSheet(id, n, false);
+      }
+      recordFailure(`sbdead:${id}`, e);
     }
     throw e;
   }
@@ -212,7 +225,15 @@ export async function sheet(id: string, n: number): Promise<Sheet> {
   if (!VIDEO_ID.test(id) || !Number.isInteger(n) || n < 0) throw new Error("bad storyboard request");
   const key = `${id}\n${n}`;
   const hit = sheets.get(key);
-  if (hit && hit.exp > Date.now()) return hit.sheet;
+  if (hit && hit.exp > Date.now()) {
+    sheets.delete(key); // least recently used goes first: a hit moves to the end
+    sheets.set(key, hit);
+    return hit.sheet;
+  }
+  if (hit) {
+    sheets.delete(key);
+    sheetBytes -= hit.sheet.body.length;
+  }
   const pending = inflight.get(key);
   if (pending) return pending;
   const p = fetchSheet(id, n, true)
