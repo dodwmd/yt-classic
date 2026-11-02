@@ -110,7 +110,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
         CompositionLocalProvider(LocalOpenSettings provides { settle(); nav.navigate("settings") }) {
         BoxWithConstraints(Modifier.padding(padding)) {
         NavHost(nav, startDestination = startDestination) {
-            composable("home") { HomeScreen(app.homeFeed, { app.settings.serverUrl.first() + "\n" + app.settings.accessToken.first() }, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) }
+            composable("home") { HomeScreen(app.homeFeed, { app.settings.serverUrl.first() + "\n" + app.settings.accessToken.first() }, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) { UpdateBanner(app) } }
             composable("tv") { TvScreen(app.host, fullscreen, { fullscreen = it }, onExit = { nav.popBackStack() }) }
             composable("playlists") { PlaylistsScreen(app.api) { nav.navigate("playlist/$it") } }
             composable("playlist/{id}", listOf(navArgument("id") { type = NavType.LongType })) { entry ->

@@ -120,7 +120,7 @@ fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit, later: LaterState? = n
 )
 
 @Composable
-fun HomeScreen(feedHolder: HomeFeed, connection: suspend () -> String, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit, onTv: () -> Unit, tvStopped: String? = null) {
+fun HomeScreen(feedHolder: HomeFeed, connection: suspend () -> String, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit, onTv: () -> Unit, tvStopped: String? = null, banner: @Composable () -> Unit = {}) {
     val api = feedHolder.api
     LaunchedEffect(feedHolder) { feedHolder.enter(connection()) }
     val hs by feedHolder.state.collectAsStateWithLifecycle()
@@ -141,6 +141,7 @@ fun HomeScreen(feedHolder: HomeFeed, connection: suspend () -> String, onVideo: 
         LazyColumn(state = feedHolder.listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             // Why TV stopped by itself (also when that happened in the background): until TV is started again.
             if (tvStopped != null) item { Text(tvStopped, modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
+            item { banner() }
             item {
                 // TV is greyed, with the reason beside it, until there are enough subscriptions (the server enforces it too).
                 val tvNeeds = tvNeedMessage(home.subs.size)

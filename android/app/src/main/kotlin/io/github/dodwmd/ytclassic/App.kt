@@ -4,8 +4,14 @@ import android.app.Application
 import io.github.dodwmd.ytclassic.data.HomeFeed
 import io.github.dodwmd.ytclassic.data.SearchHolder
 import io.github.dodwmd.ytclassic.data.SettingsStore
+import io.github.dodwmd.ytclassic.data.UpdateChecker
+import io.github.dodwmd.ytclassic.data.UpdateResult
 import io.github.dodwmd.ytclassic.data.YtApi
+import io.github.dodwmd.ytclassic.data.autoCheckDue
+import io.github.dodwmd.ytclassic.data.installedVersion
+import kotlinx.coroutines.flow.MutableStateFlow
 import io.github.dodwmd.ytclassic.player.PlaybackHost
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -28,6 +34,12 @@ class App : Application() {
     lateinit var host: PlaybackHost
         private set
 
+    /** For the "check for updates" row and the optional weekly check (the only GitHub contact; no access token is sent). */
+    val updateChecker by lazy { UpdateChecker(installedVersion(BuildConfig.VERSION_NAME, BuildConfig.VERSION_CODE)) }
+
+    /** A newer release found by the weekly check, shown as a banner on Home until dismissed. */
+    val updateBanner = MutableStateFlow<UpdateResult.Available?>(null)
+
     override fun onCreate() {
         super.onCreate()
         settings = SettingsStore(this)
@@ -36,6 +48,19 @@ class App : Application() {
         api = YtApi(server = { settings.serverUrl.first() }, token = { settings.accessToken.first() })
         host = PlaybackHost(this, api, settings)
         homeFeed = HomeFeed(api, MainScope())
+        MainScope().launch {
+            val now = System.currentTimeMillis()
+            if (autoCheckDue(settings.autoUpdateCheck.first(), settings.lastUpdateCheck.first(), now)) {
+                settings.setLastUpdateCheck(now) // also after a failure, so an offline start doesn't retry on every launch
+                updateBanner.value = try {
+                    updateChecker.check() as? UpdateResult.Available
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null // the weekly check is best-effort
+                }
+            }
+        }
         MainScope().launch { settings.backgroundAudio.collect { host.keepInBackground = it } }
     }
 }

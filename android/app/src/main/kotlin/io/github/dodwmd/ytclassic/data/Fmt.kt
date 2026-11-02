@@ -37,6 +37,12 @@ fun formatViews(n: String?): String {
     return "${NumberFormat.getIntegerInstance(Locale.US).format(v)} views"
 }
 
+/** "19,492,192 likes"; empty when unknown (YouTube can hide the count). */
+fun formatLikes(n: String?): String {
+    val v = n?.toLongOrNull() ?: return ""
+    return "${NumberFormat.getIntegerInstance(Locale.US).format(v)} ${if (v == 1L) "like" else "likes"}"
+}
+
 /** Display strings from the watch-next feed ("1.2M", "3K watching"): add "views" only when it isn't there. */
 fun viewsText(v: String): String = if (Regex("view|watching", RegexOption.IGNORE_CASE).containsMatchIn(v)) v else "$v views"
 
