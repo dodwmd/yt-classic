@@ -59,6 +59,17 @@ test("JavaScript per page stays within the size budget", () => {
   for (const f of jsFiles) assert.ok(reachable.has(f), `${f} is not used by any page`);
 });
 
+// Comments are opt-in: their code is fetched with a dynamic import() on first open, so it must stay out of every page's
+// static graph (the budget above) and stay small.
+test("the comments module is lazy: never statically imported, under 2.5 KB gzipped", () => {
+  const LAZY_MAX = 2.5 * 1024;
+  assert.match(read("js/watch.js"), /import\("\.\/comments\.js"\)/);
+  for (const f of jsFiles) assert.doesNotMatch(read(`js/${f}`), /\bfrom\s+"\.\/comments\.js"/, `${f} imports comments.js statically`);
+  const size = gz("comments.js");
+  console.log(`# JS comments.js (lazy) = ${size} bytes gzipped (max ${LAZY_MAX})`);
+  assert.ok(size < LAZY_MAX, `comments.js is ${size} bytes gzipped`);
+});
+
 test("no HTML-injection or dynamic-code sinks in the JS", () => {
   const forbidden = /\binnerHTML\b|\bouterHTML\b|insertAdjacentHTML|document\.write|\beval\s*\(|new\s+Function\s*\(|setTimeout\(\s*["'`]|setInterval\(\s*["'`]|\.srcdoc\b|createContextualFragment|\.innerText\s*=/;
   for (const f of jsFiles) assert.doesNotMatch(read(`js/${f}`), forbidden, `${f} uses a forbidden sink`);
@@ -90,7 +101,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html", "tv.js": "tv.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "comments.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html", "tv.js": "tv.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");

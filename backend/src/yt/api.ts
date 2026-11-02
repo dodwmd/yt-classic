@@ -45,7 +45,7 @@ export interface ChannelPage {
 
 const BASE = "https://www.googleapis.com/youtube/v3";
 
-async function call(path: string, params: Record<string, string>): Promise<any> {
+export async function call(path: string, params: Record<string, string>): Promise<any> {
   const key = process.env.YT_API_KEY;
   if (!key) throw new Error("YT_API_KEY is not set");
   const url = `${BASE}/${path}?${new URLSearchParams({ ...params, key })}`;
@@ -129,6 +129,8 @@ async function videoDetails(ids: string[]): Promise<Map<string, { duration: stri
 
 export interface VideoDetail extends VideoSummary {
   likes?: string;
+  /** Comment count from the video's statistics; absent when comments are turned off (and for entries cached before this field existed). */
+  commentCount?: string;
   /** "live" or "upcoming" for streams; absent for ordinary videos (and for entries cached before this field existed). */
   liveBroadcastContent?: string;
   /** Set only when the Data API already says this video can't be played (a classified error code). */
@@ -161,6 +163,7 @@ export function video(id: string): Promise<VideoDetail | null> {
       durationSeconds: isoSeconds(v.contentDetails.duration),
       views: v.statistics?.viewCount,
       likes: v.statistics?.likeCount,
+      commentCount: typeof v.statistics?.commentCount === "string" ? v.statistics.commentCount : undefined,
       liveBroadcastContent: v.snippet.liveBroadcastContent === "live" || v.snippet.liveBroadcastContent === "upcoming" ? v.snippet.liveBroadcastContent : undefined,
       unplayable: unplayableReason(v),
     };

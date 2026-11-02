@@ -6,14 +6,14 @@ import { CODES, isCode, type ErrorCode } from "./errors.ts";
  * a fixed bucket, so no request path, id or query can ever add a series.
  */
 
-export const ROUTE_CLASSES = ["healthz", "status", "metrics", "auth", "home", "search", "video", "channel", "history", "subscriptions", "stream", "page", "other"] as const;
+export const ROUTE_CLASSES = ["healthz", "status", "metrics", "auth", "home", "search", "video", "comments", "channel", "history", "subscriptions", "stream", "page", "other"] as const;
 export type RouteClass = (typeof ROUTE_CLASSES)[number];
 export const STATUS_CLASSES = ["1xx", "2xx", "3xx", "4xx", "5xx"] as const;
 
 const ROUTES: ReadonlyArray<readonly [string, RouteClass]> = [
   ["/healthz", "healthz"], ["/api/status", "status"], ["/status", "status"], ["/api/metrics", "metrics"],
   ["/api/session", "auth"], ["/api/login", "auth"], ["/api/logout", "auth"], ["/api/home", "home"], ["/api/search", "search"],
-  ["/api/video/", "video"], ["/api/channel/", "channel"], ["/api/history", "history"], ["/api/progress", "history"],
+  ["/api/video/", "video"], ["/api/comments/", "comments"], ["/api/channel/", "channel"], ["/api/history", "history"], ["/api/progress", "history"],
   ["/api/subscriptions", "subscriptions"], ["/api/subscribe", "subscriptions"], ["/api/unsubscribe", "subscriptions"], ["/stream/", "stream"],
 ];
 const PAGES = new Set(["/", "/results", "/watch", "/history", "/subscriptions", "/login"]);

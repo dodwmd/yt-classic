@@ -1,0 +1,25 @@
+{
+  "items": [
+    {
+      "id": "UgxAAAAAAAAAAAAAAAAAAAAAAAAA.r1",
+      "author": "@Alice",
+      "authorChannelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "authorThumb": "https://yt3.ggpht.com/a=s48",
+      "text": "reply & one",
+      "likeCount": 7,
+      "publishedAt": "2024-05-01T10:00:00Z",
+      "replyCount": 0
+    },
+    {
+      "id": "UgxAAAAAAAAAAAAAAAAAAAAAAAAA.r2",
+      "author": "@Alice",
+      "authorChannelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "authorThumb": "https://yt3.ggpht.com/a=s48",
+      "text": "reply two",
+      "likeCount": 7,
+      "publishedAt": "2024-05-01T10:00:00Z",
+      "replyCount": 0
+    }
+  ],
+  "nextPageToken": "RPAGE2"
+}

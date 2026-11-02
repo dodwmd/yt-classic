@@ -35,9 +35,10 @@ const FIXTURES: Array<[ErrorCode, string]> = [
   ["network", "ERROR: [youtube] dQw4w9WgXcQ: Unable to download webpage: ('Connection aborted.', ConnectionResetError(104, 'Connection reset by peer'))"],
 ];
 
+// comments-disabled comes only from the Data API (classifyUpstream), never from yt-dlp text.
 test("every real yt-dlp message maps to its code", () => {
   for (const [code, text] of FIXTURES) assert.equal(classifyText(text), code, text);
-  for (const code of CODES) if (code !== "busy" && code !== "unknown") assert.ok(FIXTURES.some(([c]) => c === code), `a fixture for ${code}`);
+  for (const code of CODES) if (code !== "busy" && code !== "unknown" && code !== "comments-disabled" && code !== "stale-page") assert.ok(FIXTURES.some(([c]) => c === code), `a fixture for ${code}`);
 });
 
 test("ambiguous messages resolve to the more specific code", () => {
@@ -92,7 +93,16 @@ test("Data API failures: quota reasons, 429, not-found, the rest", () => {
   for (const reason of ["quotaExceeded", "rateLimitExceeded", "userRateLimitExceeded", "dailyLimitExceeded"]) assert.equal(classifyUpstream(403, reason), "rate-limited", reason);
   assert.equal(classifyUpstream(429, ""), "rate-limited");
   assert.equal(classifyUpstream(404, "videoNotFound"), "removed");
-  assert.equal(classifyUpstream(403, "forbidden"), "unknown");
+  assert.equal(classifyUpstream(403, "commentsDisabled"), "comments-disabled");
+  assert.equal(classifyUpstream(403, "commentsdisabled"), "comments-disabled");
+  assert.equal(classifyUpstream(403, "commentNotFound"), "removed");
+  assert.equal(classifyError(new UpstreamError("YouTube API commentThreads failed: 403 disabled comments", 403, "commentsDisabled")), "comments-disabled");
+  assert.equal(classifyUpstream(403, "forbidden"), "private");
+  assert.equal(classifyUpstream(400, "invalidPageToken"), "stale-page");
+  assert.equal(classifyUpstream(400, "processingFailure"), "network");
+  assert.equal(classifyUpstream(404, "videoNotFound"), "removed");
+  assert.equal(INFO["stale-page"].retryable, true);
+  assert.equal(classifyUpstream(403, "somethingElse"), "unknown");
   assert.equal(classifyUpstream(500, ""), "unknown");
   assert.equal(classifyUpstream(504, ""), "network");
   assert.equal(classifyError(new UpstreamError("YouTube API videos failed: 403 The request cannot be completed because you have exceeded your quota.", 403, "quotaExceeded")), "rate-limited");
@@ -100,7 +110,7 @@ test("Data API failures: quota reasons, 429, not-found, the rest", () => {
 
 test("the table: every code has a status, a safe message and a boolean retryable", () => {
   const statuses: Record<ErrorCode, number> = {
-    "age-restricted": 403, "region-blocked": 403, "members-only": 403, private: 404, removed: 404,
+    "age-restricted": 403, "region-blocked": 403, "members-only": 403, "comments-disabled": 403, "stale-page": 400, private: 404, removed: 404,
     "rate-limited": 429, busy: 503, "bot-check": 502, network: 502, unknown: 502, live: 409, upcoming: 409,
   };
   assert.deepEqual(Object.keys(INFO).sort(), [...CODES].sort());

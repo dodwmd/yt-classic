@@ -41,6 +41,15 @@
         <div class="views" id="views"></div>
       </div>
       <details open><summary>Description</summary><div class="desc" id="desc"></div></details>
+      <section id="comments">
+        <button id="cm-open" type="button" aria-expanded="false" aria-controls="cm-body">Show comments</button> <span id="cm-fail" role="status"></span>
+        <div id="cm-body" hidden>
+          <div id="cm-order" role="group" aria-label="Sort comments"><button type="button" data-o="top" aria-pressed="true">Top</button><button type="button" data-o="new" aria-pressed="false">Newest</button></div>
+          <div id="cm-list"></div>
+          <p id="cm-msg" role="status"></p>
+          <button id="cm-more" type="button" data-label="Load more" hidden>Load more</button>
+        </div>
+      </section>
     </div>
     <div id="related">
       <h3 id="rel-heading"></h3>
@@ -54,6 +63,21 @@
     <div>
       <a class="title"></a>
       <div class="sub"><span class="chan"></span><br><span class="meta"></span></div>
+    </div>
+  </div>
+</template>
+<template id="t-comment">
+  <div class="cm">
+    <img class="av" width="32" height="32" alt="">
+    <div class="cb">
+      <div class="ch"><a class="au"></a> <span class="ag"></span></div>
+      <div class="ct"></div>
+      <div class="cf"><span class="lk"></span> <button class="rp" type="button" aria-expanded="false" hidden></button></div>
+      <div class="rl" hidden>
+        <div class="rb"></div>
+        <p class="rs" role="status"></p>
+        <button class="rm" type="button" data-label="Show more replies">Show more replies</button>
+      </div>
     </div>
   </div>
 </template>

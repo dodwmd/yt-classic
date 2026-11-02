@@ -63,6 +63,8 @@ data class VideoDetail(
     val durationSeconds: Long? = null,
     val views: String? = null,
     val likes: String? = null,
+    /** The video's comment count as the Data API reports it; null when comments are off (or an older server). */
+    val commentCount: String? = null,
 )
 
 @Serializable
@@ -254,6 +256,23 @@ data class ChannelAbout(
     val videoCount: String? = null,
     val links: List<String> = emptyList(),
 )
+
+/** One comment or reply from the backend: plain text only (the server strips markup), [replyCount] is 0 for replies. */
+@Serializable
+data class Comment(
+    val id: String,
+    val author: String = "",
+    val authorChannelId: String? = null,
+    val authorThumb: String? = null,
+    val text: String = "",
+    val likeCount: Long = 0,
+    val publishedAt: String = "",
+    val updatedAt: String? = null,
+    val replyCount: Int = 0,
+)
+
+@Serializable
+data class CommentPage(val items: List<Comment> = emptyList(), val nextPageToken: String? = null)
 
 @Serializable
 data class ChannelAboutResponse(val about: ChannelAbout)
