@@ -101,8 +101,25 @@ class YtApi(
         FormBody.Builder().add("hideWatched", if (prefs.hideWatched) "1" else "0").add("shorts", prefs.shorts).add("live", prefs.live).build(),
     ).build()))
 
-    suspend fun search(query: String, pageToken: String? = null): SearchPage =
-        get("api/search", "q" to query, "pageToken" to pageToken)
+    /** Video search; [duration] is any|short|medium|long and [sort] relevance|date|views (see [SearchFilters]). */
+    suspend fun search(query: String, pageToken: String? = null, duration: String? = null, sort: String? = null): SearchPage =
+        get("api/search", "q" to query, "pageToken" to pageToken, "duration" to duration?.takeIf { it != "any" }, "sort" to sort?.takeIf { it != "relevance" })
+
+    suspend fun searchChannels(query: String, pageToken: String? = null): ChannelSearchPage =
+        get("api/search", "q" to query, "type" to "channel", "pageToken" to pageToken)
+
+    /** Up to 8 completions of [query] (the server asks YouTube; an empty list when that is unavailable). */
+    suspend fun suggest(query: String): List<String> = get<Suggestions>("api/search/suggest", "q" to query.trim().take(100)).suggestions
+
+    suspend fun recentSearches(): List<RecentSearch> = get<RecentSearches>("api/searches").searches
+
+    suspend fun removeRecentSearch(id: Long) {
+        execute(request(url("api/searches/$id")).delete().build()).use { check(it) }
+    }
+
+    suspend fun clearRecentSearches() {
+        execute(request(url("api/searches")).delete().build()).use { check(it) }
+    }
 
     suspend fun video(id: String, quality: Int? = null): VideoResponse =
         get("api/video/$id", "q" to quality?.toString())
@@ -189,7 +206,7 @@ class YtApi(
 
     private suspend fun check(r: Response) {
         if (r.code == 401) throw AuthException(token().isNotBlank())
-        if (!r.isSuccessful) throw ApiException("Request failed (${r.code})")
+        if (!r.isSuccessful) throw apiErrorFrom(r.code, withContext(Dispatchers.IO) { r.body.string() }) // keeps the server's code and message
     }
 
     /**

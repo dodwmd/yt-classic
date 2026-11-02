@@ -3,6 +3,7 @@ package io.github.dodwmd.ytclassic
 import com.sun.net.httpserver.HttpServer
 import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.YtApi
+import io.github.dodwmd.ytclassic.ui.channelDetails
 import io.github.dodwmd.ytclassic.data.normalizeServerUrl
 import kotlinx.coroutines.runBlocking
 import java.net.InetSocketAddress
@@ -39,7 +40,17 @@ class ApiTest {
                 path == "/healthz" -> 200 to "ok"
                 path == "/api/status" -> 200 to fixture("status")
                 path == "/api/home" -> 200 to fixture("home")
-                path == "/api/search" -> 200 to fixture("search")
+                path == "/api/search" -> 200 to fixture(
+                    when {
+                        "type=channel" in ex.requestURI.query -> "search-channels"
+                        "duration=" in ex.requestURI.query || "sort=" in ex.requestURI.query -> "search-filtered"
+                        else -> "search"
+                    },
+                )
+                path == "/api/search/suggest" -> 200 to fixture("suggest")
+                path == "/api/searches" && ex.requestMethod == "GET" -> 200 to fixture("searches")
+                path == "/api/searches" && ex.requestMethod == "DELETE" -> 200 to """{"removed":1}"""
+                path.startsWith("/api/searches/") && ex.requestMethod == "DELETE" -> 200 to """{"removed":true}"""
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
                 path == "/api/video/private0001" -> 404 to """{"error":"This video is private.","code":"private","retryable":false}"""
                 path == "/api/video/limited0001" -> 429 to """{"error":"YouTube is limiting requests right now. Try again in a while.","code":"rate-limited","retryable":true}"""
@@ -114,6 +125,49 @@ class ApiTest {
     fun searchPassesPageToken() = runBlocking {
         api.search("nixos", pageToken = "2")
         assertEquals("GET /api/search?q=nixos&pageToken=2", requests.last())
+    }
+
+    @Test
+    fun filtersAreSentOnlyWhenTheyAreNotTheDefaults() = runBlocking {
+        val page = api.search("veritasium", duration = "short", sort = "views")
+        assertEquals("GET /api/search?q=veritasium&duration=short&sort=views", requests.last())
+        assertEquals(3, page.items.size)
+        assertTrue(page.items.all { (it.durationSeconds ?: 0) < 240 }, "the fixture is a real short-videos search")
+        api.search("veritasium", duration = "any", sort = "relevance")
+        assertEquals("GET /api/search?q=veritasium", requests.last())
+        assertEquals(emptyList(), page.notes)
+    }
+
+    @Test
+    fun channelSearchParsesRealResponse() = runBlocking {
+        val page = api.searchChannels("veritasium")
+        assertEquals("GET /api/search?q=veritasium&type=channel", requests.last())
+        assertEquals(3, page.channels.size)
+        val c = page.channels.first()
+        assertEquals("UCHnyfMqiRRG1u-2MsSQLbXA", c.id)
+        assertEquals("Veritasium", c.title)
+        assertEquals("@veritasium", c.handle)
+        assertEquals("21400000", c.subscribers)
+        assertTrue(c.thumb.startsWith("https://"))
+        assertFalse(c.subscribed)
+        assertEquals("21,400,000 subscribers", channelDetails(c).substringAfter(" · "))
+        api.searchChannels("veritasium", "2")
+        assertEquals("GET /api/search?q=veritasium&type=channel&pageToken=2", requests.last())
+    }
+
+    @Test
+    fun suggestionsAndRecentSearches() = runBlocking {
+        assertEquals(8, api.suggest("veritas").size)
+        assertEquals("GET /api/search/suggest?q=veritas", requests.last())
+        api.suggest("  " + "x".repeat(300))
+        assertTrue(requests.last().length < 150, "the query is capped before it is sent")
+        val recent = api.recentSearches()
+        assertEquals(listOf("science"), recent.map { it.query })
+        assertEquals(3L, recent.single().id)
+        api.removeRecentSearch(3)
+        assertEquals("DELETE /api/searches/3", requests.last())
+        api.clearRecentSearches()
+        assertEquals("DELETE /api/searches", requests.last())
     }
 
     @Test

@@ -91,6 +91,19 @@ export const MIGRATIONS: Migration[] = [
       CREATE INDEX playlist_items_video ON playlist_items (video_id);
     `,
   },
+  {
+    // Recent searches, shared by every client. One row per distinct query (key = normalised text), newest first.
+    version: 5,
+    sql: `
+      CREATE TABLE searches (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        query TEXT NOT NULL,
+        key TEXT NOT NULL UNIQUE,
+        at INTEGER NOT NULL
+      );
+      CREATE INDEX searches_at ON searches (at);
+    `,
+  },
 ];
 
 /**

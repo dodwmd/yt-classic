@@ -70,7 +70,37 @@ data class SearchPage(
     val items: List<VideoSummary> = emptyList(),
     val nextPageToken: String? = null,
     val prevPageToken: String? = null,
+    /** Plain-language remarks from the server, e.g. a filter that could only be approximated. */
+    val notes: List<String> = emptyList(),
 )
+
+/** One channel in a channel search. [subscribed] is computed by the server per request. */
+@Serializable
+data class ChannelHit(
+    val id: String,
+    val title: String = "",
+    val thumb: String = "",
+    val description: String = "",
+    val subscribers: String? = null,
+    val handle: String? = null,
+    val subscribed: Boolean = false,
+)
+
+@Serializable
+data class ChannelSearchPage(
+    val channels: List<ChannelHit> = emptyList(),
+    val nextPageToken: String? = null,
+    val notes: List<String> = emptyList(),
+)
+
+@Serializable
+data class RecentSearch(val id: Long, val query: String, val at: Long = 0)
+
+@Serializable
+data class RecentSearches(val searches: List<RecentSearch> = emptyList())
+
+@Serializable
+data class Suggestions(val suggestions: List<String> = emptyList())
 
 @Serializable
 data class RelatedList(val heading: String = "", val items: List<RelatedItem> = emptyList())

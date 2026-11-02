@@ -2,6 +2,7 @@ package io.github.dodwmd.ytclassic
 
 import android.app.Application
 import io.github.dodwmd.ytclassic.data.HomeFeed
+import io.github.dodwmd.ytclassic.data.SearchHolder
 import io.github.dodwmd.ytclassic.data.SettingsStore
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.player.PlaybackHost
@@ -19,6 +20,9 @@ class App : Application() {
     /** The Home screen's state (feed pages, scroll, filters), kept for the life of the process so Back restores it. */
     lateinit var homeFeed: HomeFeed
         private set
+
+    /** Search results kept while the user visits a channel and comes back. */
+    val searchHolder = SearchHolder()
 
     /** Owns the player, so playback can outlive the activity (background audio). */
     lateinit var host: PlaybackHost

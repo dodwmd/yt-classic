@@ -45,9 +45,25 @@ export function channelRequests(id, { tab, list, pageToken }) {
 
 const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})(?:\?([^#]*))?$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
 const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"], ["/tv", "/tv"]]);
+// /results?search_query=...[&type=][&duration=][&sort=]: rebuilt from the decoded text and constants, never echoed.
+const FIELDS = { type: /^(video|channel)$/, duration: /^(any|short|medium|long)$/, sort: /^(relevance|date|views)$/ };
+function results(next) {
+  const m = /^\/results\?search_query=([\w%.~+-]{1,600})((?:&(?:type|duration|sort)=[a-z]{1,9}){0,3})$/.exec(next ?? "");
+  if (!m) return "";
+  let q;
+  try { q = decodeURIComponent(m[1].replaceAll("+", " ")); } catch { return ""; }
+  if (!q.trim() || q.length > 200 || /\p{Cc}/u.test(q)) return "";
+  const out = new URLSearchParams({ search_query: q });
+  for (const f of m[2].split("&").filter(Boolean)) {
+    const [k, v] = f.split("=");
+    if (!FIELDS[k].test(v) || out.has(k)) return "";
+    out.set(k, v);
+  }
+  return `/results?${out}`;
+}
 export function destination(next) {
   const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
-  return w ? "/watch?v=" + w[1] : c ? channelHref(c[1], channelParams(new URLSearchParams(c[2]))) : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
+  return results(next) || (w ? "/watch?v=" + w[1] : c ? channelHref(c[1], channelParams(new URLSearchParams(c[2]))) : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/");
 }
 
 const login = document.getElementById("login");
@@ -67,6 +83,8 @@ export async function run(main) {
     status.textContent = note || "";
     status.hidden = !note;
     tvLink();
+    const box = $("#q"); // the suggestions code is only fetched once the search box is used
+    box?.addEventListener("focus", () => import("./suggest.js").then((m) => m.suggestions(box)).catch(() => {}), { once: true });
     fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {
     status.textContent = err.message || String(err);

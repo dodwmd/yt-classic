@@ -4,7 +4,14 @@ import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ime
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -47,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import io.github.dodwmd.ytclassic.App
@@ -63,6 +71,13 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
     val keyboard = LocalSoftwareKeyboardController.current
     // Searching (or navigating) should put the keyboard away, otherwise it covers the results.
     val settle = { focus.clearFocus(); keyboard?.hide() }
+    // Whichever screen opens, the search box lets go of the keyboard and its panel.
+    val here by nav.currentBackStackEntryAsState()
+    LaunchedEffect(here?.id) { settle() }
+    var searchFocused by remember { mutableStateOf(false) }
+    val recent = remember(app) { RecentState(app.api) }
+    val search = { text: String -> if (text.isNotBlank()) { recent.invalidate(); settle(); nav.navigate("search/${Uri.encode(text.trim())}") } }
+    BackHandler(enabled = searchFocused) { settle() }
 
     // First launch: no server yet, so start on Settings (not Home, which would show an error under it).
     val start by produceState<String?>(null) { value = if (app.settings.serverUrl.first().isBlank()) "settings" else "home" }
@@ -83,14 +98,16 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
             if (!fullscreen) Masthead(
                 query = query, onQuery = { query = it },
                 onHome = { settle(); toHome() },
-                onSearch = { if (query.isNotBlank()) { settle(); nav.navigate("search/${Uri.encode(query.trim())}") } },
+                onSearch = { search(query) },
                 onSettings = { settle(); nav.navigate("settings") },
+                onFocus = { searchFocused = it },
             )
         },
     ) { padding ->
         val startDestination = start ?: return@Scaffold
         CompositionLocalProvider(LocalOpenSettings provides { settle(); nav.navigate("settings") }) {
-        NavHost(nav, startDestination = startDestination, modifier = Modifier.padding(padding)) {
+        BoxWithConstraints(Modifier.padding(padding)) {
+        NavHost(nav, startDestination = startDestination) {
             composable("home") { HomeScreen(app.homeFeed, { app.settings.serverUrl.first() + "\n" + app.settings.accessToken.first() }, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) }
             composable("tv") { TvScreen(app.host, fullscreen, { fullscreen = it }, onExit = { nav.popBackStack() }) }
             composable("playlists") { PlaylistsScreen(app.api) { nav.navigate("playlist/$it") } }
@@ -99,7 +116,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
             }
             composable("history") { HistoryScreen(app.api, openVideo) }
             composable("search/{q}", listOf(navArgument("q") { type = NavType.StringType })) { entry ->
-                SearchScreen(app.api, entry.arguments?.getString("q").orEmpty(), openVideo)
+                SearchScreen(app.api, app.searchHolder, entry.arguments?.getString("q").orEmpty(), openVideo, openChannel)
             }
             composable(
                 "watch/{id}?t={t}",
@@ -109,7 +126,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
             }
             composable("channel/{id}", listOf(navArgument("id") { type = NavType.StringType })) { entry ->
                 val id = entry.arguments?.getString("id").orEmpty()
-                ChannelScreen(app.api, id, openVideo) { nav.navigate("channel/$id/playlist/$it") { launchSingleTop = true } }
+                ChannelScreen(app.api, id, openVideo, { nav.navigate("channel/$id/playlist/$it") { launchSingleTop = true } }) { cid, on -> app.searchHolder.setSubscribed(cid, on) }
             }
             composable("channel/{id}/playlist/{pid}", listOf(navArgument("id") { type = NavType.StringType }, navArgument("pid") { type = NavType.StringType })) { entry ->
                 ChannelPlaylistScreen(app.api, entry.arguments?.getString("id").orEmpty(), entry.arguments?.getString("pid").orEmpty(), openVideo)
@@ -117,12 +134,18 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
             composable("status") { StatusScreen(app.api) }
             composable("settings") { SettingsScreen(app, onDone = toHome, onStatus = { nav.navigate("status") }) }
         }
+        if (searchFocused) {
+            val density = LocalDensity.current
+            val keyboard = with(density) { WindowInsets.ime.getBottom(density).toDp() }
+            SearchPanel(app.api, recent, query, (maxHeight - keyboard).coerceIn(96.dp, 288.dp), Modifier.align(Alignment.TopStart)) { query = it; search(it) }
+        }
+        }
         }
     }
 }
 
 @Composable
-private fun Masthead(query: String, onQuery: (String) -> Unit, onHome: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit) {
+private fun Masthead(query: String, onQuery: (String) -> Unit, onHome: () -> Unit, onSearch: () -> Unit, onSettings: () -> Unit, onFocus: (Boolean) -> Unit) {
     val shape = RoundedCornerShape(4.dp)
     Row(
         Modifier.fillMaxWidth().background(Masthead).windowInsetsPadding(WindowInsets.statusBars.union(WindowInsets.displayCutout)).padding(horizontal = 8.dp, vertical = 6.dp),
@@ -142,11 +165,13 @@ private fun Masthead(query: String, onQuery: (String) -> Unit, onHome: () -> Uni
             cursorBrush = SolidColor(Classic.fieldText),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
             keyboardActions = KeyboardActions(onSearch = { onSearch() }),
-            modifier = Modifier.weight(1f).heightIn(min = 38.dp).background(Classic.fieldBackground, shape).border(1.dp, Classic.fieldBorder, shape)
+            modifier = Modifier.weight(1f).heightIn(min = 48.dp).onFocusChanged { onFocus(it.isFocused) }.background(Classic.fieldBackground, shape).border(1.dp, Classic.fieldBorder, shape)
                 .padding(horizontal = 10.dp, vertical = 9.dp).semantics { contentDescription = "Search" },
             decorationBox = { inner ->
-                if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = Classic.fieldHint)
-                inner()
+                Box(Modifier.heightIn(min = 30.dp), contentAlignment = Alignment.CenterStart) {
+                    if (query.isEmpty()) Text("Search", fontSize = 15.sp, color = Classic.fieldHint)
+                    inner()
+                }
             },
         )
         TextButton(onClick = onSettings, modifier = Modifier.semantics { contentDescription = "Settings" }) {

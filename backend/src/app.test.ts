@@ -9,8 +9,10 @@ import { createApp, resetTvLimiter } from "./app.ts";
 import { clearCache } from "./cache.ts";
 import { closeDb, getDb } from "./db.ts";
 import { clearHistory } from "./history.ts";
+import { clearSearches, listSearches } from "./searches.ts";
+import { resetSuggest } from "./suggest.ts";
 import { deletePlaylist, listPlaylists, resetLookupLimit, noteLookup, MAX_LOOKUPS_PER_HOUR } from "./playlists.ts";
-import { clearFailures, killChildren } from "./yt/dlp.ts";
+import { clearFailures, killChildren, resolveUrls } from "./yt/dlp.ts";
 import { ROUTE_CLASSES, RESOLVE_BUCKETS, STATUS_CLASSES } from "./metrics.ts";
 import { CODES, INFO, type ErrorCode } from "./errors.ts";
 
@@ -24,6 +26,7 @@ let port = 0;
 let tmp = "";
 const realFetch = globalThis.fetch;
 let videoCalls = 0;
+let apiSearchCalls = 0;
 
 function script(name: string, body: string): string {
   const p = join(tmp, name);
@@ -41,6 +44,10 @@ before(async () => {
     "yt-dlp",
     `mode=j; for a in "$@"; do [ "$a" = "-g" ] && mode=g; done
 [ "$mode" = g ] && echo x >> "$(dirname "$0")/resolves"
+[ -n "$ARGS_LOG" ] && echo "$@" >> "$ARGS_LOG"
+[ "$mode" = j ] && [ -n "$SEARCH_SLEEP" ] && sleep "$SEARCH_SLEEP"
+case "$*" in *zeroresults*) echo '{"entries":[]}'; exit 0;; esac
+case "$*" in *sp=EgIQAg*) echo '{"entries":[{"id":"${tvChan("c")}","channel_id":"${tvChan("c")}","channel":"Chan C","uploader_id":"@chanc","channel_follower_count":1234,"description":"About C","thumbnails":[{"url":"//yt3.ggpht.com/a=s88","width":88},{"url":"//yt3.ggpht.com/a=s176","width":176}]},{"id":"${VID}","title":"a video, not a channel"}]}'; exit 0;; esac
 if [ "$mode" = g ] && [ -n "$FAKE_YTDLP_ERR" ]; then printf '%s\\n' "$FAKE_YTDLP_ERR" >&2; exit 1
 elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; echo https://example.invalid/v; echo https://example.invalid/a
 else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","channel":"Chan","channel_id":"${CHANNEL}","duration":65,"view_count":10}]}'; fi`,
@@ -49,6 +56,7 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
   // Stub only the YouTube Data API; nothing here touches the network.
   globalThis.fetch = (async (input: string | URL | Request) => {
     const u = input instanceof Request ? input.url : String(input);
+    if (u.includes("/youtube/v3/search")) apiSearchCalls++;
     if (u.includes("/feeds/videos.xml")) { // TV tests: channel UC<c x22> has videos T<c>1.. T<c>3
       const cid = new URL(u).searchParams.get("channel_id") ?? "";
       const c = cid[2];
@@ -101,10 +109,15 @@ after(() => {
 beforeEach(() => {
   clearCache();
   clearHistory();
+  clearSearches();
+  resetSuggest();
+  delete process.env.ARGS_LOG;
   resetLookupLimit();
   for (const p of listPlaylists()) if (!p.builtin) deletePlaylist(p.id);
   getDb().exec("DELETE FROM playlist_items");
   videoCalls = 0;
+  apiSearchCalls = 0;
+  delete process.env.SEARCH_SLEEP;
   resetTvLimiter();
   rmSync(process.env.PIDFILE!, { force: true });
   delete process.env.FAKE_RESOLVE_SLEEP;
@@ -956,4 +969,165 @@ test("an unreachable database leaves sqlite_bytes out of /api/metrics and null i
     process.env.DATA_DIR = saved;
     closeDb();
   }
+});
+
+// --- search: type, filters, channels, suggestions, recent searches ---
+const jget = async (path: string) => {
+  const r = await get(path);
+  return { status: r.status, json: JSON.parse(r.body) };
+};
+const loggedArgs = () => (existsSync(join(tmp, "args.log")) ? readFileSync(join(tmp, "args.log"), "utf8").trim().split("\n") : []);
+const startLog = () => {
+  rmSync(join(tmp, "args.log"), { force: true });
+  process.env.ARGS_LOG = join(tmp, "args.log");
+};
+
+test("search: type, duration and sort are validated; the plain call is unchanged", async () => {
+  assert.equal((await get("/api/search?q=a&type=playlist")).status, 400);
+  assert.equal((await get("/api/search?q=a&duration=huge")).status, 400);
+  assert.equal((await get("/api/search?q=a&sort=random")).status, 400);
+  const r = await jget("/api/search?q=plain");
+  assert.equal(r.status, 200);
+  assert.equal(r.json.items[0].id, VID);
+  assert.equal(r.json.notes, undefined);
+});
+
+test("search: filters reach YouTube's own search through the sp parameter; unfiltered stays on ytsearch", async () => {
+  startLog();
+  assert.equal((await get("/api/search?q=cats")).status, 200);
+  assert.equal((await get("/api/search?q=cats&duration=short&sort=views")).status, 200);
+  const [plain, filtered] = loggedArgs();
+  assert.match(plain, /ytsearch20:cats/);
+  assert.match(filtered, /results\?search_query=cats&sp=CAMSBBABGAE%3D/); // sort views, type video, duration short
+});
+
+test("search: filtered results are cached per filter, and the duration bucket is enforced on what comes back", async () => {
+  startLog();
+  await get("/api/search?q=dup&duration=long");
+  await get("/api/search?q=dup&duration=long");
+  await get("/api/search?q=dup&duration=short");
+  assert.equal(loggedArgs().length, 2);
+  // the fake video lasts 65 s: a "long" filter must not show it even if upstream ignored the filter
+  assert.deepEqual((await jget("/api/search?q=dup&duration=long")).json.items, []);
+  assert.equal((await jget("/api/search?q=dup&duration=short")).json.items.length, 1);
+});
+
+test("search: channel results are validated, flagged when subscribed, and paging needs a token", async () => {
+  await get("/api/subscribe", { method: "POST", body: `id=${tvChan("c")}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+  try {
+    const r = await jget("/api/search?q=chans&type=channel");
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json.channels, [{ id: tvChan("c"), title: "Chan C", thumb: "https://yt3.ggpht.com/a=s176", description: "About C", subscribers: "1234", handle: "@chanc", subscribed: true }]);
+    assert.equal(r.json.items, undefined);
+  } finally {
+    await get("/api/unsubscribe", { method: "POST", body: `id=${tvChan("c")}`, headers: { "content-type": "application/x-www-form-urlencoded" } });
+  }
+  assert.equal((await jget("/api/search?q=chans&type=channel")).json.channels[0].subscribed, false, "cached page, but subscribed is computed per request");
+});
+
+test("search: recent searches record first pages only, dedupe, and stay out of failed searches", async () => {
+  await get("/api/search?q=Alpha");
+  await get("/api/search?q=beta&type=channel");
+  await get("/api/search?q=alpha"); // same query, different case: moves to the top
+  await get("/api/search?q=alpha&pageToken=2"); // paging is not a new search
+  await get("/api/search?q=gamma&duration=bogus"); // rejected: not recorded
+  await get("/api/search?q="); // empty: not recorded
+  const r = await jget("/api/searches");
+  assert.deepEqual(r.json.searches.map((s: { query: string }) => s.query), ["alpha", "beta"]);
+  assert.equal(typeof r.json.searches[0].id, "number");
+});
+
+test("recent searches: delete one, clear all, bad ids, and writes are same-origin only", async () => {
+  await get("/api/search?q=one");
+  await get("/api/search?q=two");
+  const evil = { origin: "http://evil.example" };
+  assert.equal((await get("/api/searches", { method: "DELETE", headers: evil })).status, 403);
+  assert.equal((await get("/api/searches/1", { method: "DELETE", headers: { "sec-fetch-site": "cross-site" } })).status, 403);
+  assert.equal(listSearches().length, 2);
+  assert.equal((await get("/api/searches/abc", { method: "DELETE" })).status, 400);
+  assert.equal((await get("/api/searches", { method: "POST" })).status, 405);
+  const [{ id }] = listSearches();
+  assert.deepEqual(JSON.parse((await get(`/api/searches/${id}`, { method: "DELETE" })).body), { removed: true });
+  assert.deepEqual(JSON.parse((await get(`/api/searches/${id}`, { method: "DELETE" })).body), { removed: false });
+  assert.deepEqual(JSON.parse((await get("/api/searches", { method: "DELETE" })).body), { removed: 1 });
+  assert.deepEqual((await jget("/api/searches")).json, { searches: [] });
+});
+
+test("suggest: returns parsed suggestions, caps the query, and tolerates failure with an empty list", async () => {
+  const prev = globalThis.fetch;
+  let calls = 0;
+  let mode: "ok" | "down" | "junk" = "ok";
+  globalThis.fetch = (async (input: string | URL | Request) => {
+    const u = String(input instanceof Request ? input.url : input);
+    if (new URL(u).hostname !== "suggestqueries-clients6.youtube.com") return prev(input as string);
+    calls++;
+    if (mode === "down") throw new TypeError("fetch failed");
+    if (mode === "junk") return new Response("<html>nope</html>");
+    return new Response('window.google.ac.h(["cat",[["cats",0,[512]],["cat videos",0],["cats",0]],{"k":1}])');
+  }) as typeof fetch;
+  try {
+    assert.deepEqual((await jget("/api/search/suggest?q=cat")).json, { suggestions: ["cats", "cat videos"] });
+    await get("/api/search/suggest?q=CAT%20"); // normalised: served from the short cache
+    assert.equal(calls, 1);
+    mode = "down";
+    assert.deepEqual((await jget("/api/search/suggest?q=dog")).json, { suggestions: [] });
+    mode = "junk";
+    assert.deepEqual((await jget("/api/search/suggest?q=bird")).json, { suggestions: [] });
+    assert.deepEqual((await jget("/api/search/suggest?q=")).json, { suggestions: [] });
+    assert.equal((await get("/api/search/suggest?q=" + "x".repeat(101))).status, 400);
+    assert.equal(calls, 3, "an empty query never contacts Google");
+    assert.equal((await get("/api/searches")).body.includes("cat"), false, "typing suggestions are not recorded as searches");
+  } finally {
+    globalThis.fetch = prev;
+  }
+});
+
+test("search and suggest refuse cross-site triggers: nothing is spawned, recorded or fetched", async () => {
+  startLog();
+  for (const h of [{ "sec-fetch-site": "cross-site" } as Record<string, string>, { origin: "http://evil.example" }, { "sec-fetch-site": "same-site" }]) {
+    assert.equal((await get("/api/search?q=csrf", { headers: h })).status, 403);
+    assert.equal((await get("/api/search?q=csrf&type=channel", { headers: h })).status, 403);
+    assert.equal((await get("/api/search/suggest?q=csrf", { headers: h })).status, 403);
+  }
+  assert.deepEqual(loggedArgs(), []);
+  assert.deepEqual(listSearches(), []);
+  assert.equal((await get("/api/search?q=ok", { headers: { "sec-fetch-site": "same-origin" } })).status, 200);
+  assert.equal((await get("/api/search?q=ok2", { headers: { "sec-fetch-site": "none" } })).status, 200);
+});
+
+test("a search is recorded only when it found something, and a database problem never breaks it", async () => {
+  assert.equal((await get("/api/search?q=zeroresults")).status, 200);
+  assert.deepEqual(listSearches(), []);
+  assert.equal((await get("/api/search?q=zeroresults&type=channel")).status, 200);
+  assert.deepEqual(listSearches(), []);
+  getDb().exec("ALTER TABLE searches RENAME TO searches_away");
+  const realErr = console.error;
+  const logged: string[] = [];
+  console.error = (...a: unknown[]) => void logged.push(a.join(" "));
+  try {
+    const r = await get("/api/search?q=secretterm");
+    assert.equal(r.status, 200);
+    assert.equal(JSON.parse(r.body).items.length, 1);
+  } finally {
+    console.error = realErr;
+    getDb().exec("ALTER TABLE searches_away RENAME TO searches");
+  }
+  assert.ok(logged.length === 1 && !logged[0].includes("secretterm"), logged.join("|"));
+});
+
+test("a flood of searches gets 503s, spends no Data API quota and leaves playback its own slots", async () => {
+  process.env.SEARCH_SLEEP = "1";
+  let settled = false;
+  const flood = Promise.all(Array.from({ length: 14 }, (_, i) => get(`/api/search?q=flood${i}`))).then((r) => ((settled = true), r));
+  await sleep(300); // the searches now hold their slots (and the queue is full)
+  const urls = await resolveUrls("PLAYBACK001", 720, "");
+  assert.ok(urls.length > 0, "playback resolved");
+  assert.equal(settled, false, "and did not have to wait for the searches to finish");
+  const out = await flood;
+  const codes = out.map((r) => r.status);
+  assert.ok(codes.every((c) => c === 200 || c === 503), codes.join());
+  assert.ok(codes.filter((c) => c === 503).length >= 6, codes.join());
+  assert.ok(codes.filter((c) => c === 200).length >= 2, codes.join());
+  assert.equal(apiSearchCalls, 0, "busy is not a broken yt-dlp: no Data API quota");
+  assert.equal(out.find((r) => r.status === 503)!.headers["retry-after"], "5");
 });

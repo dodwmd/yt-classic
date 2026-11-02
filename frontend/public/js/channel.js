@@ -1,4 +1,5 @@
 import { $, TABS, api, cardNode, channelHref, channelParams, channelRequests, clone, markWatched, run, safeImg, setTitle, thumbUrl } from "./lib.js";
+import { subToggle } from "./sub.js";
 import { formatSeconds, formatViews, join, timeAgo } from "./fmt.js";
 
 const id = decodeURIComponent(location.pathname.split("/")[2] ?? "");
@@ -74,30 +75,7 @@ run(async () => {
   }
   tabBar();
 
-  const button = $("#sub-btn");
-  let on = subscribed;
-  const paint = () => (button.textContent = on ? "Unsubscribe" : "Subscribe");
-  paint();
-  button.addEventListener("click", async () => {
-    button.disabled = true;
-    try {
-      const res = await api(`/api/${on ? "unsubscribe" : "subscribe"}`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ id }),
-      });
-      on = res.subscribed;
-      button.title = "";
-      $("#sub-error").textContent = "";
-      paint();
-    } catch (err) {
-      paint();
-      button.title = err.message; // keep the label; show why it failed on hover and to screen readers
-      $("#sub-error").textContent = err.message;
-    } finally {
-      button.disabled = false;
-    }
-  });
+  subToggle($("#sub-btn"), id, subscribed, $("#sub-error"));
 
   const page = data ? data.page : head.page;
   $("#sect").textContent = list ? data.playlist.title : tab === "videos" ? "Uploads" : $("#tabs [aria-current]").textContent;

@@ -98,7 +98,7 @@ class ChannelModel(private val api: YtApi, private val id: String) : ViewModel()
 private val TAB_NAMES = listOf("Videos", "Playlists", "Shorts", "Live", "About")
 
 @Composable
-fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit, onPlaylist: (String) -> Unit) {
+fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit, onPlaylist: (String) -> Unit, onSubscribed: (String, Boolean) -> Unit = { _, _ -> }) {
     val model = viewModel<ChannelModel>(key = "channel:$id", factory = viewModelFactory { initializer { ChannelModel(api, id) } })
     // Above the load, so a Retry of a failed header load keeps the tab; saved across rotation and process death.
     var tab by rememberSaveable(id) { mutableIntStateOf(0) }
@@ -130,6 +130,7 @@ fun ChannelScreen(api: YtApi, id: String, onVideo: (String) -> Unit, onPlaylist:
                     scope.launch {
                         try {
                             subscribed = api.setSubscribed(c.channel.id, !subscribed)
+                            onSubscribed(c.channel.id, subscribed)
                             failure = null
                         } catch (e: ApiException) {
                             failure = e.message

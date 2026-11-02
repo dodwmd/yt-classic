@@ -20,6 +20,27 @@ export interface SearchPage {
   items: VideoSummary[];
   nextPageToken?: string;
   prevPageToken?: string;
+  /** Plain-language remarks about how the results were produced (e.g. a filter that could only be approximated). */
+  notes?: string[];
+}
+export type Duration = "any" | "short" | "medium" | "long";
+export type Sort = "relevance" | "date" | "views";
+export interface SearchOpts {
+  duration: Duration;
+  sort: Sort;
+}
+export interface ChannelHit {
+  id: string;
+  title: string;
+  thumb: string;
+  description: string;
+  subscribers?: string;
+  handle?: string;
+}
+export interface ChannelPage {
+  channels: ChannelHit[];
+  nextPageToken?: string;
+  notes?: string[];
 }
 
 const BASE = "https://www.googleapis.com/youtube/v3";
@@ -40,11 +61,19 @@ async function call(path: string, params: Record<string, string>): Promise<any> 
 
 const TEN_MIN = 10 * 60_000;
 
+/** Takes one of today's Data API searches (quota.ts) and throws when the daily cap is used up; called only for real API calls. */
+export type Reserve = () => void;
+const free: Reserve = () => {};
+
 /** Data API search: 100 quota units. Used only as a fallback for yt-dlp search. */
-export function apiSearch(q: string, pageToken = ""): Promise<SearchPage> {
-  return cached(`search:${q}:${pageToken}`, TEN_MIN, async () => {
+export function apiSearch(q: string, pageToken = "", opts: SearchOpts = { duration: "any", sort: "relevance" }, reserve: Reserve = free): Promise<SearchPage> {
+  const filters = opts.duration === "any" && opts.sort === "relevance" ? "" : `:${opts.duration}:${opts.sort}`;
+  return cached(`search:${q}:${pageToken}${filters}`, TEN_MIN, async () => {
     const params: Record<string, string> = { part: "snippet", type: "video", maxResults: "20", q };
+    if (opts.duration !== "any") params.videoDuration = opts.duration; // short < 4 min, medium 4-20 min, long > 20 min
+    if (opts.sort !== "relevance") params.order = opts.sort === "views" ? "viewCount" : "date";
     if (pageToken) params.pageToken = pageToken;
+    reserve(); // only a real API call gets here: a cache hit never takes from the daily cap
     const data = await call("search", params); // 100 quota units
     const items: VideoSummary[] = (data.items ?? []).map((i: any) => ({
       id: i.id.videoId,
@@ -62,6 +91,31 @@ export function apiSearch(q: string, pageToken = ""): Promise<SearchPage> {
       it.views = details.get(it.id)?.views;
     }
     return { items, nextPageToken: data.nextPageToken, prevPageToken: data.prevPageToken };
+  });
+}
+
+/** Data API channel search: 100 quota units plus 1 for the statistics lookup. Fallback only, behind the daily cap. */
+export function apiChannelSearch(q: string, pageToken = "", reserve: Reserve = free): Promise<{ channels: ChannelHit[]; nextPageToken?: string }> {
+  return cached(`chsearch:${q}:${pageToken}`, TEN_MIN, async () => {
+    const params: Record<string, string> = { part: "snippet", type: "channel", maxResults: "20", q };
+    if (pageToken) params.pageToken = pageToken;
+    reserve();
+    const data = await call("search", params); // 100 quota units (+1 below for the statistics)
+    const ids: string[] = (data.items ?? []).map((i: any) => i?.id?.channelId).filter((x: unknown) => typeof x === "string");
+    const stats = new Map<string, { subs?: string; handle?: string }>();
+    if (ids.length) {
+      const d = await call("channels", { part: "snippet,statistics", id: ids.join(",") }); // 1 unit
+      for (const c of d.items ?? []) stats.set(c.id, { subs: c.statistics?.hiddenSubscriberCount ? undefined : c.statistics?.subscriberCount, handle: c.snippet?.customUrl });
+    }
+    const channels: ChannelHit[] = (data.items ?? []).map((i: any) => ({
+      id: i?.id?.channelId,
+      title: i?.snippet?.title ?? "",
+      thumb: i?.snippet?.thumbnails?.medium?.url ?? i?.snippet?.thumbnails?.default?.url ?? "",
+      description: i?.snippet?.description ?? "",
+      subscribers: stats.get(i?.id?.channelId)?.subs,
+      handle: stats.get(i?.id?.channelId)?.handle,
+    }));
+    return { channels, nextPageToken: data.nextPageToken };
   });
 }
 
