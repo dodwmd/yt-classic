@@ -197,7 +197,7 @@ class AuthTest {
     @Test
     fun authorizationDoesNotFollowACrossHostRedirect() {
         // "evil" is a second server on another port; the backend (first server) answers the stream with a redirect to it.
-        val seen = mutableListOf<String?>()
+        val seen = java.util.concurrent.CopyOnWriteArrayList<String?>() // two server threads append: a plain list loses updates
         val evil = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         evil.createContext("/") { ex ->
             seen += ex.requestHeaders.getFirst("Authorization")
@@ -208,10 +208,10 @@ class AuthTest {
         val home = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
         home.createContext("/") { ex ->
             val sawAuth = ex.requestHeaders.getFirst("Authorization")
+            seen += "home:$sawAuth" // record BEFORE answering, so the client can't reach "evil" first
             ex.responseHeaders.add("Location", "http://127.0.0.1:${evil.address.port}/steal")
             ex.sendResponseHeaders(302, -1)
             ex.close()
-            seen += "home:$sawAuth"
         }
         home.start()
         try {
