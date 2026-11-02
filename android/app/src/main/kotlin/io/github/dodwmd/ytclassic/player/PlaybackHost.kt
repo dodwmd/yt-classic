@@ -165,11 +165,17 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         override fun stop() = endSession() // the notification was dismissed
     }
 
+    /**
+     * Bumped wherever the inputs of [playIntent] (the player's playWhenReady, the pending restart and its wish) change,
+     * so readers of [wantsToPlay] in a snapshot (the picture-in-picture parameters) are told about them.
+     */
+    private var intentVersion by mutableIntStateOf(0)
+
     /** Whether playback is meant to run: the pending restart's wish while one is pending, else the player's. */
     private val playIntent: Boolean get() = if (seek.restarting) pendingPlay else exo.playWhenReady
 
-    /** Whether the user expects sound right now (not paused, not finished, not failed). */
-    val wantsToPlay: Boolean get() = video != null && error == null && (!finished || tv != null) && playIntent
+    /** Whether the user expects sound right now (not paused, not finished, not failed). Observable in a snapshot. */
+    val wantsToPlay: Boolean get() = intentVersion >= 0 && video != null && error == null && (!finished || tv != null) && playIntent
 
     init {
         // While playing, tell the server every 10 s. Runs on the app scope, so it also works with the screen off.
@@ -180,6 +186,10 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             }
         }
         exo.addListener(object : Player.Listener {
+            override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+                intentVersion++
+            }
+
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 this@PlaybackHost.isPlaying = isPlaying
                 if (reportsOnPause(isPlaying, exo.playWhenReady, seek.restarting)) reportProgress() // paused or stopped
@@ -400,6 +410,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true) {
         val v = video ?: return
         pendingPlay = play ?: playIntent
+        intentVersion++
         quality = q
         error = null
         errorCode = null
@@ -419,10 +430,12 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
                 exo.setMediaItem(item(v, url))
                 exo.prepare()
                 exo.playWhenReady = pendingPlay
+                intentVersion++
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 seek.failRestart()
+                intentVersion++
                 buffering = false
                 needsToken = e is AuthException
                 errorCode = (e as? ApiException)?.code
@@ -439,11 +452,12 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         if (!canStartPlayback(appVisible, keepInBackground)) return
         if (finished) return load(0, play = true)
         startService() // the session may have been dismissed while paused
-        if (seek.restarting) pendingPlay = true else exo.play()
+        if (seek.restarting) { pendingPlay = true; intentVersion++ } else exo.play()
     }
 
     fun pause() {
         pendingPlay = false
+        intentVersion++
         exo.pause()
     }
 
@@ -468,6 +482,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         if (!finished && !seek.restarting) reportProgress() // before the player is torn down
         loading?.cancel()
         seek.failRestart()
+        intentVersion++
         exo.stop()
         exo.clearMediaItems()
         video = null

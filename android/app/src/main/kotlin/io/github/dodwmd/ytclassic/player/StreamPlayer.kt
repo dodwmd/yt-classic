@@ -103,6 +103,7 @@ fun StreamPlayer(
 
     fun savePosition() { if (host.video?.id == video.id) onPosition(if (host.finished) 0 else host.positionSeconds()) }
 
+    DisposableEffect(pip) { onDispose { pip.clearVideoBounds() } }
     DisposableEffect(video.id) {
         host.open(video, initialQuality, lang, startSeconds)
         onDispose {
@@ -163,7 +164,10 @@ fun StreamPlayer(
     val videoView = remember(host) { movableContentOf { m: Modifier ->
         Box(m.onGloballyPositioned {
             val r = it.boundsInWindow()
-            pip.setVideoBounds(Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt())) // the transition's source
+            // The picture inside the view (not the black bars), as the transition's source.
+            val size = host.videoSize
+            val f = fittedRect(r.left.toInt(), r.top.toInt(), r.width.toInt(), r.height.toInt(), pipAspect(size.width, size.height, size.pixelWidthHeightRatio))
+            pip.setVideoBounds(Rect(f.left, f.top, f.right, f.bottom))
         }) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
@@ -195,7 +199,8 @@ fun StreamPlayer(
         // The video fills the screen; tap it to show or hide the controls laid over the bottom.
         Box(modifier.fillMaxSize().background(Color.Black)) {
             videoView(
-                Modifier.fillMaxSize().clickable(
+                // In the small window the system owns taps (they show its own buttons): no click target there.
+                if (pip.inPip) Modifier.fillMaxSize() else Modifier.fillMaxSize().clickable(
                     interactionSource = remember { MutableInteractionSource() }, indication = null,
                     role = Role.Button, onClickLabel = if (controlsVisible) "Hide controls" else "Show controls",
                 ) { controlsVisible = !controlsVisible }.semantics { contentDescription = "Video" },

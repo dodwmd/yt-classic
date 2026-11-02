@@ -36,6 +36,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.unit.dp
 import io.github.dodwmd.ytclassic.App
+import io.github.dodwmd.ytclassic.player.LocalPip
 import io.github.dodwmd.ytclassic.data.ServerCheck
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.isPrivateHost
@@ -141,16 +142,21 @@ fun SettingsScreen(app: App, onDone: () -> Unit, onStatus: () -> Unit) {
             Switch(checked = background, onCheckedChange = null)
         }
         val pip by app.settings.pictureInPicture.collectAsState(initial = true)
+        val pipSupported = LocalPip.current.supported
         Row(
-            Modifier.fillMaxWidth().toggleable(value = pip, role = Role.Switch) { scope.launch { app.settings.setPictureInPicture(it) } },
+            Modifier.fillMaxWidth().toggleable(value = pip && pipSupported, enabled = pipSupported, role = Role.Switch) { scope.launch { app.settings.setPictureInPicture(it) } },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Column(Modifier.weight(1f)) {
                 Text("Picture in picture")
-                Text("A playing video shrinks into a small window when you leave the app, and the player gets a button for it.", color = Muted)
+                Text(
+                    if (pipSupported) "A playing video shrinks into a small window when you leave the app, and the player gets a button for it. Closing the window stops the video."
+                    else "Not available: this device doesn't support it, or it is turned off for this app in the system settings.",
+                    color = Muted,
+                )
             }
-            Switch(checked = pip, onCheckedChange = null)
+            Switch(checked = pip && pipSupported, enabled = pipSupported, onCheckedChange = null)
         }
         SubscriptionsSection(app.api)
         Text("Server health", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))

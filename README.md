@@ -488,12 +488,16 @@ the setting off) whenever the app is in the background, so open the app and pres
 fullscreen) does it on demand. The window shows only the video, shaped like it (default 16:9, clamped to the platform's
 1:2.39 to 2.39:1), with Play/Pause and, in TV mode, Skip buttons. Tap the window to expand: the same video continues at
 the same position, and fullscreen (and its landscape lock) is restored if it was on. Settings has **Picture in picture**
-(on by default). It only applies to a video that is actually playing: paused, finished, failed or idle playback just goes
-to the background as before. How it combines with the other settings: picture in picture takes precedence over
-**Keep playing in the background** while the window is up (the app counts as on screen, so nothing pauses). Dismissing
-the window (X) stops the app like leaving it does: with background playback on the audio goes on with its notification,
-with it off the video pauses and the session ends. With picture in picture off, or on a device without it
-(`FEATURE_PICTURE_IN_PICTURE`), leaving the app behaves as described under Background audio.
+(on by default; the switch is disabled with an explanation when the device lacks it or it is off for the app in system
+settings). **Upgrading:** it is on by default, so after updating, pressing Home during a playing video shrinks it into the
+window instead of just continuing as audio; turn **Picture in picture** off in Settings for the old behaviour. It only
+applies to a video that is actually playing (not paused, buffering a paused seek, finished or failed); otherwise leaving
+the app is an ordinary background. How it combines with the other settings: while the window is up the app counts as on
+screen, so nothing pauses and **Keep playing in the background** does not matter. Closing the window with X ends the
+video like any "stop": it pauses, the notification and (in TV mode) the TV session go away, and reopening the app offers
+Play where it left off, whatever the background setting says. A screen that turns off while the window is up is not a
+close: playback continues per the background setting. With picture in picture off, or unavailable
+(`FEATURE_PICTURE_IN_PICTURE`, or the system's per-app switch), leaving the app behaves as described under Background audio.
 
 **Not yet:** offline downloads, Play Store publishing.
 
