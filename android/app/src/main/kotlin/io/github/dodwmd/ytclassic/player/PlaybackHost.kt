@@ -7,6 +7,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -28,6 +29,7 @@ import androidx.media3.exoplayer.source.SinglePeriodTimeline
 import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.AuthException
 import io.github.dodwmd.ytclassic.data.NeedSubscriptionsException
+import io.github.dodwmd.ytclassic.data.SettingsStore
 import io.github.dodwmd.ytclassic.data.VideoDetail
 import io.github.dodwmd.ytclassic.data.errorBodyOf
 import io.github.dodwmd.ytclassic.data.shortMessage
@@ -36,6 +38,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
@@ -50,7 +53,7 @@ import kotlinx.coroutines.launch
  * [load]; everything outside the app (the session) must use it rather than the raw ExoPlayer.
  */
 @OptIn(UnstableApi::class)
-class PlaybackHost(private val context: Context, private val api: YtApi) {
+class PlaybackHost(private val context: Context, private val api: YtApi, private val settings: SettingsStore) {
     /** The stream's origin and its `Authorization` value; set before each load. Read on ExoPlayer's loader thread. */
     @Volatile private var streamOrigin: String? = null
     @Volatile private var streamAuth: String? = null
@@ -72,12 +75,16 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private var lang = ""
     private val reportLock = Mutex()
     private var lastReported = -1L // the last position sent to the server
+    private var speedLoaded = false // the stored speed has been read (or the user chose one): it must not overwrite a newer choice
     private var screenAttached = false // the watch screen for [video] is in composition
 
     /** The video being played, or null when nothing is. Set by [open], cleared by [stop]. */
     var video by mutableStateOf<VideoDetail?>(null)
         private set
     var quality by mutableIntStateOf(0)
+        private set
+    /** Playback speed (media time per real time); the persisted default, applied to every video. Pitch stays corrected (ExoPlayer's default). */
+    var speed by mutableFloatStateOf(1f)
         private set
     var isPlaying by mutableStateOf(false)
         private set
@@ -178,6 +185,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     val wantsToPlay: Boolean get() = intentVersion >= 0 && video != null && error == null && (!finished || tv != null) && playIntent
 
     init {
+        scope.launch { loadSpeed() } // so the speed button shows the stored speed before any video starts
         // While playing, tell the server every 10 s. Runs on the app scope, so it also works with the screen off.
         scope.launch {
             while (true) {
@@ -232,6 +240,26 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
                 endIfDone()
             }
         })
+    }
+
+    /** Applies the stored speed once, before the first stream is prepared (so there is no first second at 1x). */
+    private suspend fun loadSpeed() {
+        if (speedLoaded) return
+        val stored = settings.playbackSpeed.first()
+        if (!speedLoaded) applySpeed(stored)
+        speedLoaded = true
+    }
+
+    private fun applySpeed(value: Float) {
+        speed = clampSpeed(value)
+        exo.setPlaybackSpeed(speed)
+    }
+
+    /** The user chose [value]: applies it (the player keeps it across stream restarts, and the session shows it) and keeps it as the global default. */
+    fun changeSpeed(value: Float) {
+        speedLoaded = true
+        applySpeed(value)
+        scope.launch { settings.setPlaybackSpeed(speed) } // app scope: outlives the watch screen
     }
 
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
@@ -356,7 +384,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             delay(1_000)
             if (tv !== session || !isPlaying || seek.restarting || seek.totalSeconds <= 0) continue
             if (++playedTicks >= TV_CONFIRM_SECONDS) session.onProgressed()
-            if (seek.totalSeconds - positionSeconds() <= TV_PREFETCH_SECONDS) tvPerform(session, session.onNearEnd())
+            if (wallSecondsLeft(seek.totalSeconds, positionSeconds(), speed) <= TV_PREFETCH_SECONDS) tvPerform(session, session.onNearEnd())
         }
     }
 
@@ -426,6 +454,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
                 val url = api.streamUrl(v.id, q, start, lang)
                 streamOrigin = origin(url)
                 streamAuth = api.streamAuthorization()
+                loadSpeed()
                 seek.commitRestart()
                 exo.setMediaItem(item(v, url))
                 exo.prepare()

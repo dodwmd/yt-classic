@@ -43,10 +43,16 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 #pl-new { margin: 0 0 16px; } #pl-new input { font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); }
 #hist-bar { display: flex; align-items: center; gap: 16px; margin: 8px 0 16px; } .rm { margin-top: 4px; }
 .rel .title { display: block; } .rel .sub { color: var(--muted); }
-#player { width: 640px; background: #000; } #player video { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: contain; display: block; }
+#player { width: 640px; background: #000; position: relative; } #player video { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: contain; display: block; }
 #player:fullscreen { width: 100%; display: flex; flex-direction: column; } #player:fullscreen video { flex: 1; min-height: 0; }
 .controls { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #222; color: #ddd; } .controls[hidden] { display: none; }
 .controls .bar { flex: 1; } .controls .vol { width: 70px; } .controls .time { font-size: 12px; min-width: 90px; }
+.controls .spd { background: #222; color: #fff; border: 1px solid #555; font-size: 13px; }
+#player video { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+.vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.tapfx { user-select: none; -webkit-user-select: none; position: absolute; top: 40%; padding: 8px 14px; border-radius: 24px; background: rgba(0,0,0,.7); color: #fff; font-size: 18px; pointer-events: none; } .tapfx[hidden] { display: none; }
+.tapfx.l { left: 8%; } .tapfx.r { right: 8%; }
+@media (prefers-reduced-motion: no-preference) { .tapfx { animation: tapfx .7s ease-out; } @keyframes tapfx { from { transform: scale(.8); opacity: .3; } to { transform: scale(1); opacity: 1; } } }
 .controls button { background: none; border: 0; color: #fff; cursor: pointer; font-size: 14px; }
 
 #import textarea { width: 100%; max-width: 560px; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); }
@@ -93,10 +99,10 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   .controls button { min-width: 44px; min-height: 44px; font-size: 20px; padding: 0; }
   .controls .bar { flex: 1 1 100%; order: 5; min-height: 44px; margin: 0; } .controls .time { font-size: 14px; min-width: 0; flex: 1; }
   .controls .vol { width: 90px; min-height: 44px; margin: 0; flex: none; }
-  .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .fs { order: 4; }
+  .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .spd { order: 3; min-height: 44px; font-size: 16px; } .controls .fs { order: 4; }
 }
 @media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .chrow { flex-direction: row; gap: 12px; } .chrow .thumb { width: 88px; } .controls .vol { display: none; } }
 @media (max-height: 500px) and (orientation: landscape) and (max-width: 900px) {
   #player { max-width: calc((100vh - 170px) * 16 / 9); margin: 0 auto; }
-  .controls { flex-wrap: nowrap; } .controls .bar { flex: 1 1 auto; order: 2; min-width: 0; } .controls .time { flex: none; order: 3; } .controls .vol { order: 4; } .controls .fs { order: 5; }
+  .controls { flex-wrap: nowrap; } .controls .bar { flex: 1 1 auto; order: 2; min-width: 0; } .controls .time { flex: none; order: 3; } .controls .vol, .controls .spd { order: 4; } .controls .fs { order: 5; }
 }
