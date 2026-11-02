@@ -199,7 +199,7 @@ test("markWatched decorates each thumb once, and only when the membership is kno
 
 test("destination() only ever returns one of the known pages, rebuilt from constants and validated ids", async () => {
   globalThis.document = { getElementById: () => null }; // lib.js looks up the login form when it loads
-  const { destination } = await import("../public/js/lib.js");
+  const { destination } = await import("../public/js/dest.js");
   const ID = "dQw4w9WgXcQ", UC = "UC" + "a".repeat(22);
   const hostile = ["//evil.com", "/\\evil.com", "/\t/evil.com", "/\n/evil.com", "/%09/evil.com", "/%0a/evil.com", "javascript:alert(1)", "https://evil.com", "http://evil.com/watch?v=" + ID,
     "evil.com", "", null, undefined, "x", "/history/../../evil", "/history?x=1", "/watch?v=short", "/watch?v=" + ID.slice(1) + "<", "/watch", "/watch?v=%3Cscript%3E123",
@@ -229,7 +229,7 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination(`/channel/${UC}?tab=evil`), `/channel/${UC}`);
   assert.equal(destination(`/channel/${UC}?`), `/channel/${UC}`);
   for (const bad of [`/channel/${UC}?tab=shorts#//evil.com`, `/channel/${UC}/?tab=shorts`, `/channel/${UC}x?tab=shorts`]) assert.equal(destination(bad), "/", bad);
-  const good = { "/results?search_query=nix+os": "/results?search_query=nix+os", "/results?search_query=nix%20os": "/results?search_query=nix+os", "/results?search_query=%C3%A9t%C3%A9": "/results?search_query=%C3%A9t%C3%A9",
+  const good = { "/results?search_query=nix+os": "/results?search_query=nix+os", "/results?search_query=nix%20os": "/results?search_query=nix%20os", "/results?search_query=%C3%A9t%C3%A9": "/results?search_query=%C3%A9t%C3%A9",
     "/results?search_query=cats&type=channel": "/results?search_query=cats&type=channel", "/results?search_query=cats&type=video&duration=short&sort=views": "/results?search_query=cats&type=video&duration=short&sort=views" };
   for (const [from, to] of Object.entries(good)) assert.equal(destination(from), to, from);
   const badResults = ["/results", "/results?", "/results?search_query=", "/results?search_query=%20", "/results?search_query=a&type=playlist", "/results?search_query=a&type=video&type=channel", "/results?search_query=a&evil=1",
