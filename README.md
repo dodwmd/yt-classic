@@ -101,6 +101,22 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   for an hour (no tracks: 10 minutes; only the track list is kept in the database, never the VTT or the subtitle URLs). The VTT
   is fetched from the URL yt-dlp gave, only over https from `youtube.com` / `googlevideo.com`, without redirects, with a
   10 s timeout and a 2 MB cap; anything that is not WebVTT is refused. A language the video lacks answers `404` `no-subtitles`.
+- **Scrub previews.** Every seek outside the buffer restarts the stream, so both clients show YouTube's storyboard thumbnails while you
+  point at or drag the seek bar. `GET /api/video/:id/storyboard` answers `{tiles: {w, h, cols, rows, count, interval, sheets}, duration}`
+  (tile size in px, tiles per sheet, tiles in all, seconds per tile, number of sheets) and `GET /api/video/:id/storyboard/:n.jpg` is sheet
+  `n` (`0 <= n < sheets`, otherwise `404`). Both come from one yt-dlp metadata call per video (its own single slot, separate from playback,
+  search and subtitles; a hung run is killed after 30 s, a failure is remembered for 30 s). The level is the widest tile up to 320 px
+  (at least 100 px) that needs at most 40 sheets, so a long video gets a narrower level rather than hundreds of sheets; only levels whose
+  sheets are full grids are used (clients map time to a tile by arithmetic). The descriptor is cached for an hour (none: 10 minutes) and only
+  it is persisted; the upstream URLs stay in memory, are never sent to a client or logged, and a sheet can only be asked for through the
+  video id and the index. A sheet is fetched over https from `ytimg.com`, `googlevideo.com` or `ggpht.com` (the exact name or a subdomain, no
+  port, no credentials), without redirects, with a 10 s timeout, a 1.5 MB cap enforced while reading, and only if it is a JPEG, WebP or PNG;
+  an expired URL (403/410) is refreshed once. Sheets are kept in a 16 MB in-memory LRU and concurrent requests for a sheet share one download.
+  A video without a storyboard answers `404` `no-storyboard`. Web: `previews.js` is loaded lazily on the first pointer over the seek bar
+  (mouse hover, pen or touch drag) and shows a tile with the time (and the chapter name, when the video has chapters) above the pointer; it
+  is `aria-hidden` and leaves the slider's keyboard use alone. Android: while you drag the seek bar a bubble above the thumb shows the tile
+  cropped from the decoded sheet (fetched with the access token, at most 8 MB of decoded sheets kept) with the time and chapter title, inline and in
+  fullscreen, and never in picture-in-picture; TalkBack hears the slider's own time announcement, not the bubble.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
@@ -328,6 +344,7 @@ Streams answer with this JSON when they fail before the first byte; a mid-stream
 | `upcoming` | 409 | no | live event or premiere not started |
 | `stale-page` | 400 | yes | the Data API rejected a page token (`invalidPageToken`): start the list again |
 | `no-subtitles` | 404 | no | the video has no subtitles in that language (subtitle routes only) |
+| `no-storyboard` | 404 | no | the video has no scrub previews, or the sheet number is out of range (storyboard routes only) |
 | `comments-disabled` | 403 | no | the video's comments are turned off (comment routes only; the video still plays, so it is not skippable) |
 | `bot-check` | 502 | yes | YouTube asks the server to prove it is not a bot |
 | `rate-limited` | 429 | yes | HTTP 429 or Data API quota (`quotaExceeded`, `rateLimitExceeded`, ...); `Retry-After: 60` |
@@ -859,11 +876,12 @@ backend/
   src/auth.ts            optional shared access token: bearer/cookie checks, constant-time compare, failure limiter
   src/tv.ts              TV mode: the random, never-the-same-channel picker
   src/store.ts           subscriptions (SQLite, imports the old subscriptions.json; atomic bulk addSubs)
+  src/yt/storyboard.ts   scrub-preview storyboards: descriptor from yt-dlp, host-allowlisted capped sheet proxy, LRU
   src/subsio.ts          subscription import (Takeout CSV, OPML, URL list) and export parsers/writers
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look; follows the system light/dark setting
-  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar), speed (lazy: speed and double-tap seek), chapters (lazy: timestamp links and chapter list)
+  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar), speed (lazy: speed and double-tap seek), chapters (lazy: timestamp links and chapter list), previews (lazy: scrub previews)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
   05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line

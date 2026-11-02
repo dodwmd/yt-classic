@@ -17,6 +17,7 @@ export const CODES = [
   "network",
   "busy",
   "no-subtitles",
+  "no-storyboard",
   "unknown",
 ] as const;
 export type ErrorCode = (typeof CODES)[number];
@@ -43,6 +44,7 @@ export const INFO: Record<ErrorCode, Info> = {
   network: { status: 502, message: "Couldn't reach YouTube. Check the server's connection and try again.", retryable: true },
   busy: { status: 503, message: "The server is busy. Try again in a few seconds.", retryable: true },
   "no-subtitles": { status: 404, message: "This video has no subtitles in that language.", retryable: false },
+  "no-storyboard": { status: 404, message: "This video has no scrub previews.", retryable: false },
   unknown: { status: 502, message: "Something went wrong talking to YouTube. Check the backend log.", retryable: true },
 };
 
@@ -89,6 +91,13 @@ export class NoSubtitles extends Error {
   }
 }
 
+/** Thrown when a video has no storyboard, or the requested sheet is outside it (also an oversized or non-image download: retrying won't help). */
+export class NoStoryboard extends Error {
+  constructor(why = "no storyboard") {
+    super(why);
+  }
+}
+
 /** A failed Data API call: the HTTP status and first error `reason` only, never the URL (it contains the key). */
 export class UpstreamError extends Error {
   status: number;
@@ -126,6 +135,7 @@ export function errorText(err: unknown): string {
 export function classifyError(err: unknown): ErrorCode {
   if (err instanceof BusyError) return "busy";
   if (err instanceof NoSubtitles) return "no-subtitles";
+  if (err instanceof NoStoryboard) return "no-storyboard";
   if (err instanceof QuotaError) return "rate-limited"; // our own daily budgets for channel tabs and comments
   if (err instanceof UpstreamError) return classifyUpstream(err.status, err.reason);
   const e = err as { code?: unknown; killed?: boolean; name?: string; message?: string; stderr?: string; cause?: { code?: unknown } } | null;

@@ -67,6 +67,7 @@ export function initChapters({ v: { id, durationSeconds: duration }, chapters, p
   }
   if (!chapters?.length) return;
 
+  player.chapters = chapters; // previews.js adds the chapter name to its time label
   const list = $("#ch-list"), label = $("#ch-name");
   $("#ch-sum").textContent = `Chapters (${chapters.length})`;
   const rows = chapters.map((c) => {

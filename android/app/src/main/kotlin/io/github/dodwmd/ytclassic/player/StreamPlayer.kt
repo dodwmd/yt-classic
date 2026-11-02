@@ -104,6 +104,10 @@ import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.geometry.Offset
 import io.github.dodwmd.ytclassic.data.formatSeconds
+import io.github.dodwmd.ytclassic.data.Tiles
+import io.github.dodwmd.ytclassic.data.locate
+import androidx.compose.ui.graphics.ImageBitmap
+import kotlin.math.roundToInt
 import kotlinx.coroutines.delay
 
 /** The seek thumb's size: passed to the Slider and used to find where its track starts and ends (for the chapter ticks). */
@@ -203,6 +207,13 @@ fun StreamPlayer(
     val chapterName = chapters.getOrNull(chapterIndexAt(chapters, (dragging ?: positionSec.toFloat()).toLong()))?.title
     val sliderColors = classicSliderColors(overVideo = fullscreen)
     val sliderSource = remember { MutableInteractionSource() }
+    // Scrub previews: the storyboard is asked for when a drag starts; the sheet with the dragged-to tile is decoded on demand.
+    val scrub = remember(video.id) { scrubPreviewFor(app.api, video.id) }
+    var tiles by remember(video.id) { mutableStateOf<Tiles?>(null) }
+    val dragRect = dragging?.let { d -> tiles?.locate(d) }
+    var sheet by remember(video.id) { mutableStateOf<Pair<Int, ImageBitmap>?>(null) }
+    LaunchedEffect(scrub, dragging != null && total > 0) { if (dragging != null && total > 0) tiles = scrub.load() }
+    LaunchedEffect(scrub, dragRect?.sheet) { dragRect?.let { r -> scrub.sheet(r.sheet)?.let { sheet = r.sheet to it } } }
     val fontScale = LocalDensity.current.fontScale
     val transport: @Composable () -> Unit = {
       // The row's real width decides what fits (a two-pane layout gives the player only part of the screen).
@@ -219,6 +230,7 @@ fun StreamPlayer(
             }
             val seekBar: @Composable RowScope.() -> Unit = {
             if (total > 0) {
+              Box(Modifier.weight(1f)) {
                 Slider(
                     value = dragging ?: positionSec.toFloat(),
                     onValueChange = { dragging = it },
@@ -231,7 +243,7 @@ fun StreamPlayer(
                     colors = sliderColors,
                     interactionSource = sliderSource,
                     thumb = { SliderDefaults.Thumb(sliderSource, colors = sliderColors, thumbSize = SLIDER_THUMB) },
-                    modifier = Modifier.weight(1f).drawWithContent {
+                    modifier = Modifier.fillMaxWidth().drawWithContent {
                         drawContent()
                         // Chapter ticks over the track: it spans the slider minus half a thumb on each side (the same thumb size is passed to the Slider).
                         if (chapters.size > 1) {
@@ -250,6 +262,13 @@ fun StreamPlayer(
                         stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}" + (chapterName?.let { ", chapter $it" } ?: "")
                     },
                 )
+                val at = dragging
+                if (at != null && dragRect != null && tiles != null && !pip.inPip) {
+                    val t = at.toLong()
+                    val label = formatSeconds(t) + (chapters.getOrNull(chapterIndexAt(chapters, t))?.title?.let { " $it" } ?: "")
+                    ScrubBubble(tiles!!, dragRect, sheet?.takeIf { it.first == dragRect.sheet }?.second, at / total, label, with(LocalDensity.current) { SLIDER_THUMB.width.toPx().roundToInt() / 2 })
+                }
+              }
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, maxLines = 1, softWrap = false, modifier = Modifier.padding(horizontal = 8.dp))
             }
             }

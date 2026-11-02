@@ -19,10 +19,11 @@ import { DURATIONS, MAX_QUERY, SORTS, search, searchChannels } from "./yt/search
 import { clearSearches, listSearches, recordSearch, removeSearch } from "./searches.ts";
 import { MAX_SUGGEST_QUERY, suggest } from "./suggest.ts";
 import { subTracks, subVtt, SUB_LANG } from "./yt/subs.ts";
+import { sheet as storyboardSheet, storyboard } from "./yt/storyboard.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { logSafe } from "./http.ts";
-import { INFO, classifyError, errorBody, type ErrorCode } from "./errors.ts";
+import { INFO, NoStoryboard, classifyError, errorBody, type ErrorCode } from "./errors.ts";
 import { countError, countRequest, routeClass } from "./metrics.ts";
 import { metricsText } from "./scrape.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
@@ -430,6 +431,17 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     if (!SUB_LANG.test(sub[2])) return json(res, 400, { error: "bad language" });
     const vtt = await subVtt(sub[1], sub[2]);
     return void res.writeHead(200, { "content-type": "text/vtt; charset=utf-8", "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" }).end(vtt);
+  }
+
+  const sb = /^\/api\/video\/([\w-]{11})\/storyboard(?:\/(\d{1,4})\.jpg)?$/.exec(path);
+  if (sb) {
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+    const d = await storyboard(sb[1]);
+    if (sb[2] === undefined) return json(res, 200, d, { "cache-control": "private, max-age=300" });
+    const n = Number(sb[2]);
+    if (n >= d.tiles.sheets) throw new NoStoryboard("sheet out of range");
+    const s = await storyboardSheet(sb[1], n);
+    return void res.writeHead(200, { "content-type": s.type, "content-length": s.body.length, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" }).end(s.body);
   }
 
   if (path.startsWith("/api/video/")) {
