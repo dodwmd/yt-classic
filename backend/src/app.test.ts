@@ -85,7 +85,7 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
       if (id === "QUOTA000000") return new Response(JSON.stringify({ error: { code: 403, message: "quota key=SECRET", errors: [{ reason: "quotaExceeded" }] } }), { status: 403 });
       if (id === "NOTFOUND000") return new Response(JSON.stringify({ items: [] }), { status: 200 });
       const item = {
-        id, snippet: { title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: "https://i.ytimg.com/server.jpg" } } },
+        id, snippet: { title: "Server title", channelId: CHANNEL, channelTitle: "Server chan", description: id === "CHAPTERS000" ? "Intro text\r\n0:00 Start\r\n2:30 - Middle\r\n(9:00) End\r\n12:00 too late" : "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: { medium: { url: "https://i.ytimg.com/server.jpg" } } },
         contentDetails: { duration: "PT10M", ...(id === "AGEVIDEO000" ? { contentRating: { ytRating: "ytAgeRestricted" } } : {}) }, statistics: {},
       };
       if (id === "LIVEVIDEO00") item.snippet = { ...item.snippet, liveBroadcastContent: "live" } as typeof item.snippet;
@@ -400,6 +400,12 @@ test("GET /api/history validates limit/before and pages", async () => {
   assert.equal(page.items.length, 1);
   assert.match(page.next, /^\d+\.\d+$/);
   assert.deepEqual(JSON.parse((await get(`/api/history?limit=1&before=${page.next}`)).body).items, []);
+});
+
+test("video carries chapters parsed from the description, and omits them when there are none", async () => {
+  const withList = JSON.parse((await get("/api/video/CHAPTERS000")).body);
+  assert.deepEqual(withList.chapters, [{ start: 0, title: "Start", end: 150 }, { start: 150, title: "Middle", end: 540 }, { start: 540, title: "End", end: 600 }]);
+  assert.equal("chapters" in JSON.parse((await get(`/api/video/${VID}`)).body), false);
 });
 
 test("video and home expose progress / continue; watched lookup", async () => {

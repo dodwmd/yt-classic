@@ -77,15 +77,27 @@ import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.ui.PlayerView
 import io.github.dodwmd.ytclassic.App
+import io.github.dodwmd.ytclassic.data.Chapter
 import io.github.dodwmd.ytclassic.data.VideoDetail
+import io.github.dodwmd.ytclassic.data.chapterIndexAt
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.geometry.Offset
 import io.github.dodwmd.ytclassic.data.formatSeconds
 import kotlinx.coroutines.delay
+
+/** The seek thumb's size: passed to the Slider and used to find where its track starts and ends (for the chapter ticks). */
+private val SLIDER_THUMB = DpSize(4.dp, 44.dp)
 
 /**
  * The player UI for [video]. Playback itself lives in [PlaybackHost], so it can continue in the background; this
@@ -93,6 +105,7 @@ import kotlinx.coroutines.delay
  * through [StreamSeek]; the slider uses the real duration from the API).
  */
 @OptIn(UnstableApi::class)
+@kotlin.OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun StreamPlayer(
     video: VideoDetail,
@@ -104,6 +117,8 @@ fun StreamPlayer(
     fullscreen: Boolean,
     onFullscreen: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
+    /** Chapter ticks on the seek bar and the current chapter's name next to the time. */
+    chapters: List<Chapter> = emptyList(),
     /** TV: adds Skip and Stop buttons to the controls (used in fullscreen, where the buttons below the player are not visible). */
     onSkip: (() -> Unit)? = null,
     onStop: (() -> Unit)? = null,
@@ -166,12 +181,18 @@ fun StreamPlayer(
         overlay = zone to run.add(zone, host.positionSeconds())
         taps++
     }
+    // A seek from elsewhere (a chapter or timestamp tap) also ends a pending double-tap run.
+    LaunchedEffect(host.loads) { if (run.active) { run.finish(); overlay = null } }
     // Any other seek replaces a pending double-tap run, so its stale target can't override it later.
     fun cancelRun() { run.finish(); overlay = null }
     fun jump(seconds: Long) { cancelRun(); host.load(host.positionSeconds() + seconds) }
 
     val textColor = if (fullscreen) Color.White else LocalContentColor.current
+    val chapterName = chapters.getOrNull(chapterIndexAt(chapters, (dragging ?: positionSec.toFloat()).toLong()))?.title
+    val sliderColors = classicSliderColors(overVideo = fullscreen)
+    val sliderSource = remember { MutableInteractionSource() }
     val transport: @Composable () -> Unit = {
+      Column(Modifier.fillMaxWidth()) {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
             TextButton(
                 onClick = { if (isPlaying) host.pause() else host.play() },
@@ -187,10 +208,26 @@ fun StreamPlayer(
                         dragging = null
                     },
                     valueRange = 0f..total.toFloat(),
-                    colors = classicSliderColors(overVideo = fullscreen),
-                    modifier = Modifier.weight(1f).semantics {
+                    colors = sliderColors,
+                    interactionSource = sliderSource,
+                    thumb = { SliderDefaults.Thumb(sliderSource, colors = sliderColors, thumbSize = SLIDER_THUMB) },
+                    modifier = Modifier.weight(1f).drawWithContent {
+                        drawContent()
+                        // Chapter ticks over the track: it spans the slider minus half a thumb on each side (the same thumb size is passed to the Slider).
+                        if (chapters.size > 1) {
+                            val inset = SLIDER_THUMB.width.toPx() / 2
+                            val span = size.width - 2 * inset
+                            val rtl = layoutDirection == LayoutDirection.Rtl
+                            for (c in chapters) if (c.start > 0) {
+                                val f = minOf(c.start, total).toFloat() / total
+                                val x = inset + span * (if (rtl) 1f - f else f)
+                                drawLine(Color.Black.copy(alpha = 0.5f), Offset(x, size.height / 2 - 7.dp.toPx()), Offset(x, size.height / 2 + 7.dp.toPx()), strokeWidth = 3.dp.toPx())
+                                drawLine(Color.White.copy(alpha = 0.9f), Offset(x, size.height / 2 - 6.dp.toPx()), Offset(x, size.height / 2 + 6.dp.toPx()), strokeWidth = 1.5.dp.toPx())
+                            }
+                        }
+                    }.semantics {
                         contentDescription = "Seek"
-                        stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}"
+                        stateDescription = "${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} of ${formatSeconds(total)}" + (chapterName?.let { ", chapter $it" } ?: "")
                     },
                 )
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
@@ -225,6 +262,8 @@ fun StreamPlayer(
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
             ) { PlayerIconView(if (fullscreen) PlayerIcon.ExitFullscreen else PlayerIcon.Fullscreen, textColor) }
         }
+        if (chapterName != null && total > 0) Text(chapterName, color = textColor, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(horizontal = 12.dp))
+      }
     }
     // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
     // surface may still redraw for a frame when it is re-attached).

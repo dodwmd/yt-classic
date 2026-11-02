@@ -13,7 +13,7 @@ run(async () => {
   const qm = await import("./quality.js").catch(() => null);
   const caps = qm?.prefs(query);
   const res = await api(`/api/video/${encodeURIComponent(id)}?${query}`);
-  const { video: v, related, quality, lang, progress, playable, message } = res;
+  const { video: v, related, chapters, quality, lang, progress, playable, message } = res;
 
   const start = explicit ?? (progress && !progress.completed ? progress.position : 0);
   setTitle(v.title);
@@ -55,6 +55,7 @@ run(async () => {
   $("#age").textContent = timeAgo(v.publishedAt);
   $("#views").textContent = join(formatViews(v.views), /^\d+$/.test(v.likes) && `${Number(v.likes).toLocaleString("en-US")} like${v.likes === "1" ? "" : "s"}`);
   $("#desc").textContent = v.description;
+  if (chapters || /\d:\d/.test(v.description)) import("./chapters.js").then((m) => m.initChapters({ v, chapters, player })).catch(() => {});
 
   $("#rel-heading").textContent = related.heading;
   for (const r of related.items) {

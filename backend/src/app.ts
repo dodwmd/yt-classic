@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video, videoFacts } from "./yt/api.ts";
+import { parseChapters } from "./yt/chapters.ts";
 import { VIDEO_ID, baseQualities, knownOffered, knownUnplayable, parseLang, requestedQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { QuotaError, tabRequestWait } from "./tabquota.ts";
 import { commentRequestWait } from "./commentquota.ts";
@@ -433,7 +434,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     // Playability hint, only when something already says it can't be played (Data API metadata or a recent yt-dlp failure).
     const reason = v.unplayable ?? knownUnplayable(id);
     const hint = reason ? { playable: false, reason, message: INFO[reason].message } : {};
-    return json(res, 200, { video: v, related, quality, auto, qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered, lang: a && lang === a ? a : "", progress, ...hint });
+    const chapters = parseChapters(v.description, v.durationSeconds); // from the description we already have: no extra API cost
+    return json(res, 200, { video: v, related, quality, auto, qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered, lang: a && lang === a ? a : "", progress, ...(chapters.length ? { chapters } : {}), ...hint });
   }
 
   if (path === "/api/history" && req.method === "GET") {

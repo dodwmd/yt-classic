@@ -1,0 +1,48 @@
+{
+  "video": {
+    "id": "CHAPTERS000",
+    "title": "Chapters demo",
+    "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+    "channelTitle": "Chan",
+    "description": "Great talk!\r\n\r\n0:00 Intro\r\n1:30 - Setting up\r\n(4:00) The main part https://x.com:8080/a\r\n1:02:03 Wrap up\r\n\r\nSkip to 4:00 for the demo, 99:00 is bogus, or 12:345.",
+    "publishedAt": "2026-01-01T00:00:00Z",
+    "thumb": "https://i.ytimg.com/vi/CHAPTERS000/mqdefault.jpg",
+    "durationSeconds": 4000,
+    "views": "10",
+    "likes": "1"
+  },
+  "related": {
+    "heading": "Related videos",
+    "items": []
+  },
+  "chapters": [
+    {
+      "start": 0,
+      "title": "Intro",
+      "end": 90
+    },
+    {
+      "start": 90,
+      "title": "Setting up",
+      "end": 240
+    },
+    {
+      "start": 240,
+      "title": "The main part https://x.com:8080/a",
+      "end": 3723
+    },
+    {
+      "start": 3723,
+      "title": "Wrap up",
+      "end": 4000
+    }
+  ],
+  "quality": 720,
+  "qualities": [
+    360,
+    480,
+    720,
+    1080
+  ],
+  "lang": ""
+}

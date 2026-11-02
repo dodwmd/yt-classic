@@ -47,6 +47,8 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 #player:fullscreen { width: 100%; display: flex; flex-direction: column; } #player:fullscreen video { flex: 1; min-height: 0; }
 .controls { display: flex; align-items: center; gap: 8px; padding: 4px 8px; background: #222; color: #ddd; } .controls[hidden] { display: none; }
 .controls .bar { flex: 1; } .controls .vol { width: 70px; } .controls .time { font-size: 12px; min-width: 90px; }
+.controls .chap { font-size: 12px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .controls .chap:empty { display: none; }
+#ch-list { list-style: none; padding: 0; margin: 6px 0 0; max-height: 260px; overflow-y: auto; } #ch-list button { display: block; width: 100%; text-align: left; padding: 4px 6px; font: inherit; color: var(--fg); background: none; border: 0; border-left: 3px solid transparent; cursor: pointer; } #ch-list button:hover { background: var(--mast); } #ch-list button[aria-current] { font-weight: bold; background: var(--mast); border-left-color: #c00; } .ch-t { display: inline-block; min-width: 56px; color: var(--link); font-variant-numeric: tabular-nums; }
 .controls .spd { background: #222; color: #fff; border: 1px solid #555; font-size: 13px; }
 #player video { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
 .vh { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -103,10 +105,13 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   .controls button { min-width: 44px; min-height: 44px; font-size: 20px; padding: 0; }
   .controls .bar { flex: 1 1 100%; order: 5; min-height: 44px; margin: 0; } .controls .time { font-size: 14px; min-width: 0; flex: 1; }
   .controls .vol { width: 90px; min-height: 44px; margin: 0; flex: none; }
+  #ch-list button { min-height: 44px; }
+  .controls .chap { order: 6; flex: 1 1 100%; max-width: none; font-size: 13px; }
   .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .spd { order: 3; min-height: 44px; font-size: 16px; } .controls .fs { order: 4; }
 }
 @media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .chrow { flex-direction: row; gap: 12px; } .chrow .thumb { width: 88px; } .controls .vol { display: none; } }
 @media (max-height: 500px) and (orientation: landscape) and (max-width: 900px) {
   #player { max-width: calc((100vh - 170px) * 16 / 9); margin: 0 auto; }
+  .controls .chap { display: none; }
   .controls { flex-wrap: nowrap; } .controls .bar { flex: 1 1 auto; order: 2; min-width: 0; } .controls .time { flex: none; order: 3; } .controls .vol, .controls .spd { order: 4; } .controls .fs { order: 5; }
 }

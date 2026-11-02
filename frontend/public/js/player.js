@@ -65,6 +65,8 @@ export function initPlayer(root, onended) {
   });
   v.addEventListener("ended", () => onended?.());
   now.restart = restart;
+  now.seek = seek;
+  root.now = now;
   now.reset = () => { // root.dataset.duration/start/src now describe a new video
     total = Number(root.dataset.duration);
     base = Number(root.dataset.start) || 0;
