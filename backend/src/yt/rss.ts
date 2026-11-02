@@ -12,6 +12,8 @@ export interface FeedItem {
   publishedAt: string;
   views?: string;
   description?: string;
+  /** The feed linked it as /shorts/<id>. Absent otherwise (RSS does not always say). */
+  short?: boolean;
 }
 
 // Out-of-range or surrogate references (which String.fromCodePoint rejects or mangles) become U+FFFD instead of throwing.
@@ -35,6 +37,7 @@ export function parseFeed(xml: string): FeedItem[] {
     publishedAt: tag(e, "published"),
     views: /<media:statistics views="(\d+)"/.exec(e)?.[1],
     description: tag(e, "media:description").slice(0, 300) || undefined,
+    short: /<link[^>]*href="[^"]*\/shorts\//.test(e) || undefined,
   })).filter((i) => i.id);
 }
 
@@ -77,5 +80,12 @@ export function channelFeed(id: string): Promise<FeedItem[]> {
 /** Merged feed, newest first. A failing channel is skipped rather than breaking the page. */
 export async function subscriptionFeed(subs: Subscription[], limit = 60): Promise<FeedItem[]> {
   const all = await Promise.all(subs.map((s) => channelFeed(s.id).catch((e) => (console.error(e.message), []))));
-  return all.flat().sort((a, b) => (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0)).slice(0, limit);
+  return mergeFeeds(all, limit);
+}
+
+/** Newest first; equal timestamps order by id, descending, so the order is total and cursors never skip or repeat. A video listed twice is kept once. */
+export function mergeFeeds(feeds: FeedItem[][], limit: number): FeedItem[] {
+  const seen = new Set<string>();
+  const all = feeds.flat().filter((i) => !seen.has(i.id) && seen.add(i.id));
+  return all.sort((a, b) => (Date.parse(b.publishedAt) || 0) - (Date.parse(a.publishedAt) || 0) || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)).slice(0, limit);
 }

@@ -14,7 +14,18 @@ import android.widget.Toast
 import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.material3.AssistChip
+import androidx.compose.foundation.layout.heightIn
+import io.github.dodwmd.ytclassic.data.HomeState
+import io.github.dodwmd.ytclassic.data.HomeFeed
+import io.github.dodwmd.ytclassic.data.AuthException
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.TextButton
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
@@ -53,8 +64,8 @@ fun thumbUrl(id: String) = "https://i.ytimg.com/vi/$id/mqdefault.jpg"
 
 @Composable
 fun FeedRow(v: FeedItem, onVideo: (String) -> Unit, watched: Boolean = false, later: LaterState? = null) = VideoRow(
-    thumb = thumbUrl(v.id), title = v.title, duration = null, watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.let { { LaterNote(it, v.id) } },
-    details = listOf(v.channelTitle, joinParts(formatViews(v.views), timeAgo(v.publishedAt))),
+    thumb = thumbUrl(v.id), title = v.title, duration = v.durationSeconds?.takeIf { it > 0 }?.let(::formatSeconds), watched = watched, trailing = later?.let { { LaterButton(it, v.id, v.title) } }, note = later?.let { { LaterNote(it, v.id) } },
+    details = listOf(v.channelTitle, joinParts(if (v.live) "Live or upcoming" else "", formatViews(v.views), timeAgo(v.publishedAt))),
     onClick = { onVideo(v.id) },
 )
 
@@ -109,12 +120,25 @@ fun HistoryRow(h: HistoryItem, onVideo: (String) -> Unit, later: LaterState? = n
 )
 
 @Composable
-fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit, onTv: () -> Unit, tvStopped: String? = null) {
-    val loaded = rememberLoad { api.home() }
-    LoadedContent(loaded) { home ->
-        val watched = rememberWatched(api, home.feed.map { it.id })
-        val later = rememberLater(api, (home.resume.map { it.id } + home.feed.map { it.id }).distinct())
-        LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+fun HomeScreen(feedHolder: HomeFeed, connection: suspend () -> String, onVideo: (String) -> Unit, onChannel: (String) -> Unit, onHistory: () -> Unit, onPlaylists: () -> Unit, onTv: () -> Unit, tvStopped: String? = null) {
+    val api = feedHolder.api
+    LaunchedEffect(feedHolder) { feedHolder.enter(connection()) }
+    val hs by feedHolder.state.collectAsStateWithLifecycle()
+    val loaded = Loaded(
+        when (val h = hs) {
+            HomeState.Loading -> LoadState.Loading
+            is HomeState.Error -> LoadState.Error(h.error.message ?: "Something went wrong.", needsToken = h.error is AuthException)
+            is HomeState.Ready -> LoadState.Ready(h)
+        },
+    ) { feedHolder.retry() }
+    LoadedContent(loaded) { ready ->
+        val home = ready.home
+        val pager = ready.pager
+        val feed by pager.state.collectAsStateWithLifecycle()
+        val openSettings = LocalOpenSettings.current
+        val watched = rememberWatched(api, feed.items.map { it.id })
+        val later = rememberLater(api, (home.resume.map { it.id } + feed.items.map { it.id }).distinct())
+        LazyColumn(state = feedHolder.listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             // Why TV stopped by itself (also when that happened in the background): until TV is started again.
             if (tvStopped != null) item { Text(tvStopped, modifier = Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }, color = MaterialTheme.colorScheme.error) }
             item {
@@ -143,17 +167,67 @@ fun HomeScreen(api: YtApi, onVideo: (String) -> Unit, onChannel: (String) -> Uni
                 }
             } else {
                 item { SectionTitle("Subscriptions") }
-                item {
-                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        items(home.subs, key = { it.id }) { s -> AssistChip(onClick = { onChannel(s.id) }, label = { Text(s.title) }) }
+                // A failed filter change or page is reported here, next to the controls that caused it.
+                feed.error?.let { e ->
+                    item {
+                        Column(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp)) {
+                            Text(e.message ?: "Request failed.", color = MaterialTheme.colorScheme.error, modifier = Modifier.semantics { liveRegion = LiveRegionMode.Assertive })
+                            Row {
+                                TextButton(onClick = pager::retry, modifier = Modifier.heightIn(min = 48.dp)) { Text("Retry") }
+                                if (e is AuthException) TextButton(onClick = openSettings, modifier = Modifier.heightIn(min = 48.dp)) { Text("Open Settings") }
+                            }
+                        }
                     }
                 }
+                feed.prefsError?.let { item { Text(it, color = Muted, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp).semantics { liveRegion = LiveRegionMode.Polite }) } }
+                // Tap a channel to show only it (tap again to clear); long-press, or the "Open channel page" action in TalkBack's menu, opens its page.
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(home.subs, key = { it.id }) { s ->
+                            val on = feed.filter.channel == s.id
+                            FilterChip(
+                                selected = on, onClick = { pager.refresh(feed.filter.copy(channel = if (on) null else s.id)) }, label = { Text(s.title) },
+                                modifier = Modifier
+                                    .pointerInput(s.id) { detectTapGestures(onLongPress = { onChannel(s.id) }) }
+                                    .semantics {
+                                        if (on) stateDescription = "Showing only this channel"
+                                        customActions = listOf(CustomAccessibilityAction("Open channel page") { onChannel(s.id); true })
+                                    },
+                            )
+                        }
+                    }
+                }
+                feed.filter.channel?.let { id ->
+                    val title = home.subs.firstOrNull { it.id == id }?.title ?: "channel"
+                    item { TextButton(onClick = { onChannel(id) }, modifier = Modifier.padding(horizontal = 4.dp).heightIn(min = 48.dp).semantics { liveRegion = LiveRegionMode.Polite }) { Text("Open $title") } }
+                }
                 item { SectionTitle("New from your subscriptions") }
-                items(home.feed.distinctBy { it.id }, key = { it.id }) { FeedRow(it, onVideo, it.id in watched, later) }
+                item {
+                    LazyRow(contentPadding = PaddingValues(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        item { FeedToggle("Hide watched", feed.filter.hideWatched) { pager.refresh(feed.filter.copy(hideWatched = it)) } }
+                        item { FeedToggle("Hide Shorts", feed.filter.hideShorts) { pager.refresh(feed.filter.copy(hideShorts = it)) } }
+                        item { FeedToggle("Hide live", feed.filter.hideLive) { pager.refresh(feed.filter.copy(hideLive = it)) } }
+                    }
+                }
+                if (feed.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 6.dp).semantics { contentDescription = "Loading videos" }) }
+                items(feed.items, key = { it.id }) { FeedRow(it, onVideo, it.id in watched, later) }
+                item {
+                    Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        if (feed.items.isEmpty() && !feed.busy && feed.error == null) Text("Nothing matches these filters.")
+                        if (feed.next != null) {
+                            OutlinedButton(enabled = !feed.busy, onClick = pager::more, modifier = Modifier.heightIn(min = 48.dp)) { Text("Load more") }
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+/** A saved on/off filter. FilterChip announces its selected state to TalkBack and keeps a 48dp touch target. */
+@Composable
+private fun FeedToggle(label: String, on: Boolean, onChange: (Boolean) -> Unit) =
+    FilterChip(selected = on, onClick = { onChange(!on) }, label = { Text(label) })
 
 @Composable
 fun HistoryScreen(api: YtApi, onVideo: (String) -> Unit) {

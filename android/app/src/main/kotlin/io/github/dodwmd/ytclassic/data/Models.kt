@@ -18,6 +18,9 @@ data class FeedItem(
     val publishedAt: String = "",
     val views: String? = null,
     val description: String? = null,
+    /** Only present when the server looked it up (a Shorts or live filter is on). */
+    val durationSeconds: Long? = null,
+    val live: Boolean = false,
 )
 
 /** Items from YouTube's watch-next feed: display strings ("1.2M", "2mo ago"), no channel id. */
@@ -76,9 +79,20 @@ data class RelatedList(val heading: String = "", val items: List<RelatedItem> = 
 data class HomeResponse(
     val subs: List<Sub> = emptyList(),
     val feed: List<FeedItem> = emptyList(),
+    /** Cursor for the rest of the feed (GET api/feed?before=...); null when this is all of it. */
+    val next: String? = null,
+    /** The filters saved on the server, already applied to [feed]. */
+    val prefs: FeedPrefs = FeedPrefs(),
     /** Unfinished videos to pick up again, most recent first. */
     @SerialName("continue") val resume: List<HistoryItem> = emptyList(),
 )
+
+/** Home feed filters shared by the web and Android clients (GET/POST api/prefs). */
+@Serializable
+data class FeedPrefs(val hideWatched: Boolean = false, val shorts: String = "show", val live: String = "show")
+
+@Serializable
+data class FeedPage(val items: List<FeedItem> = emptyList(), val next: String? = null)
 
 /** Where the server last saw this video: [position] in seconds. */
 @Serializable

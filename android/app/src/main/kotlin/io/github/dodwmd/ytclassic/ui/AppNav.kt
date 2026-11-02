@@ -91,7 +91,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
         val startDestination = start ?: return@Scaffold
         CompositionLocalProvider(LocalOpenSettings provides { settle(); nav.navigate("settings") }) {
         NavHost(nav, startDestination = startDestination, modifier = Modifier.padding(padding)) {
-            composable("home") { HomeScreen(app.api, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) }
+            composable("home") { HomeScreen(app.homeFeed, { app.settings.serverUrl.first() + "\n" + app.settings.accessToken.first() }, openVideo, openChannel, { nav.navigate("history") }, { nav.navigate("playlists") }, { app.host.clearTvMessage(); app.host.startTv(); nav.navigate("tv") }, app.host.tvMessage) }
             composable("tv") { TvScreen(app.host, fullscreen, { fullscreen = it }, onExit = { nav.popBackStack() }) }
             composable("playlists") { PlaylistsScreen(app.api) { nav.navigate("playlist/$it") } }
             composable("playlist/{id}", listOf(navArgument("id") { type = NavType.LongType })) { entry ->

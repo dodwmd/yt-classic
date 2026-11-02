@@ -52,14 +52,15 @@ else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","chann
       return new Response(`<feed><yt:channelId>${cid}</yt:channelId>${entries}</feed>`, { status: 200 });
     }
     if (u.includes("/youtube/v3/videos") && (new URL(u).searchParams.get("id") ?? "").startsWith("T")) {
-      const id = new URL(u).searchParams.get("id")!;
-      const c = id[1];
-      const live = id[2] === "3";
-      const item = {
-        id, snippet: { title: `Title ${id}`, channelId: tvChan(c), channelTitle: `Chan ${c}`, description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: {}, liveBroadcastContent: live ? "live" : "none" },
-        contentDetails: { duration: "PT10M" }, statistics: {},
-      };
-      return new Response(JSON.stringify({ items: [item] }), { status: 200 });
+      const items = (new URL(u).searchParams.get("id") ?? "").split(",").map((id) => {
+        const c = id[1];
+        const live = id[2] === "3";
+        return {
+          id, snippet: { title: `Title ${id}`, channelId: tvChan(c), channelTitle: `Chan ${c}`, description: "d", publishedAt: "2026-01-01T00:00:00Z", thumbnails: {}, liveBroadcastContent: live ? "live" : "none" },
+          contentDetails: { duration: live ? "P0D" : "PT10M" }, statistics: {},
+        };
+      });
+      return new Response(JSON.stringify({ items }), { status: 200 });
     }
     if (u.includes("/youtube/v3/channels")) {
       const item = { id: CHANNEL, snippet: { title: "Chan", description: "d", thumbnails: {} }, statistics: {}, brandingSettings: {} };
@@ -131,10 +132,10 @@ test("basic routing and validation", async () => {
   assert.equal((await get("/api/nope")).status, 404);
 });
 
-test("/api/home returns exactly the subscriptions and the feed (no suggestion rows)", async () => {
+test("/api/home returns the subscriptions, the feed and the saved filters (no suggestion rows)", async () => {
   const r = await get("/api/home");
   assert.equal(r.status, 200);
-  assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["continue", "feed", "subs"]);
+  assert.deepEqual(Object.keys(JSON.parse(r.body)).sort(), ["continue", "feed", "prefs", "subs"]);
 });
 
 const subscribeTv = async (n: number) => {
@@ -645,4 +646,50 @@ test("playlists: new-video lookups are capped globally per hour (429 + Retry-Aft
   assert.deepEqual(body(await get(`/api/playlists/1/items/${VID}`, { method: "DELETE" })), { removed: true });
   resetLookupLimit();
   assert.equal((await post("/api/playlists/1/items", "id=AAAAAAAAAA2")).status, 200);
+});
+
+const FORM = { "content-type": "application/x-www-form-urlencoded" };
+
+test("feed: /api/feed pages through the subscriptions' videos, /api/home filters, prefs persist and validate", async () => {
+  await subscribeTv(2);
+  try {
+    const home = JSON.parse((await get("/api/home")).body);
+    assert.equal(home.feed.length, 6);
+    assert.equal(home.next, undefined);
+    const p1 = JSON.parse((await get("/api/feed?limit=4")).body);
+    assert.equal(p1.items.length, 4);
+    assert.ok(p1.next);
+    const p2 = JSON.parse((await get(`/api/feed?limit=4&before=${p1.next}`)).body);
+    assert.deepEqual([...p1.items, ...p2.items].map((i: { id: string }) => i.id), home.feed.map((i: { id: string }) => i.id));
+    assert.equal(p2.next, undefined);
+    const one = JSON.parse((await get(`/api/feed?channel=${tvChan("1")}`)).body);
+    assert.deepEqual(new Set(one.items.map((i: { channelId: string }) => i.channelId)), new Set([tvChan("1")]));
+    // Live videos (id suffix 3 in the stub) are hidden by the live filter; the saved preference applies when the query says nothing.
+    assert.equal(JSON.parse((await get("/api/feed?live=hide")).body).items.length, 4);
+    assert.equal((await get("/api/feed?limit=0")).status, 400);
+    assert.equal((await get("/api/feed?limit=101")).status, 400);
+    assert.equal((await get("/api/feed?before=garbage")).status, 400);
+    assert.equal((await get("/api/feed?channel=nope")).status, 400);
+    assert.equal((await get("/api/feed?shorts=maybe")).status, 400);
+    assert.equal((await get("/api/home?hideWatched=2")).status, 400);
+
+    assert.deepEqual(JSON.parse((await get("/api/prefs")).body), { hideWatched: false, shorts: "show", live: "show" });
+    const set = await get("/api/prefs", { method: "POST", headers: FORM, body: "live=hide&hideWatched=1" });
+    assert.deepEqual(JSON.parse(set.body), { hideWatched: true, shorts: "show", live: "hide" });
+    assert.equal(JSON.parse((await get("/api/feed")).body).items.length, 4, "saved live=hide applies by default");
+    assert.equal(JSON.parse((await get("/api/feed?live=show&hideWatched=0")).body).items.length, 6, "the query overrides the preference");
+    for (const bad of ["shorts=nope", "foo=bar", "hideWatched=yes", "", "live=hide&x=1"]) {
+      assert.equal((await get("/api/prefs", { method: "POST", headers: FORM, body: bad })).status, 400, bad);
+    }
+    assert.deepEqual(JSON.parse((await get("/api/prefs")).body), { hideWatched: true, shorts: "show", live: "hide" }, "a refused update changes nothing");
+    assert.equal((await get("/api/prefs", { method: "POST", headers: { ...FORM, origin: "http://evil.example" }, body: "shorts=hide" })).status, 403);
+    assert.equal((await get("/api/prefs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ shorts: "hide" }) })).status, 200);
+    const bools = await get("/api/prefs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ hideWatched: false, shorts: true, live: false }) });
+    assert.deepEqual(JSON.parse(bools.body), { hideWatched: false, shorts: "hide", live: "show" });
+    assert.match(JSON.parse((await get("/api/prefs", { method: "POST", headers: FORM, body: "live=sometimes" })).body).error, /show.*hide/);
+    assert.equal((await get("/api/prefs", { method: "DELETE" })).status, 405);
+  } finally {
+    await unsubscribeTv();
+    await get("/api/prefs", { method: "POST", headers: FORM, body: "hideWatched=0&shorts=show&live=show" });
+  }
 });

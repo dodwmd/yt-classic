@@ -1,0 +1,37 @@
+{
+  "items": [
+    {
+      "id": "aVid0000002",
+      "title": "Video aVid0000002",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-26T12:00:00+00:00",
+      "views": "1002"
+    },
+    {
+      "id": "bVid0000002",
+      "title": "Video bVid0000002",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-25T12:00:00+00:00",
+      "views": "1002"
+    },
+    {
+      "id": "aVid0000003",
+      "title": "Video aVid0000003",
+      "channelId": "UCaaaaaaaaaaaaaaaaaaaaaa",
+      "channelTitle": "Channel A",
+      "publishedAt": "2026-10-24T12:00:00+00:00",
+      "views": "1003"
+    },
+    {
+      "id": "bVid0000003",
+      "title": "Video bVid0000003",
+      "channelId": "UCbbbbbbbbbbbbbbbbbbbbbb",
+      "channelTitle": "Channel B",
+      "publishedAt": "2026-10-23T12:00:00+00:00",
+      "views": "1003"
+    }
+  ],
+  "next": "MTc5Mjc1NjgwMDAwMDpiVmlkMDAwMDAwMw"
+}

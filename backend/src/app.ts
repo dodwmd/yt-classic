@@ -2,12 +2,14 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
-import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video } from "./yt/api.ts";
+import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video, videoFacts } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { QuotaError, tabRequestWait } from "./tabquota.ts";
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { channelFeed, subscriptionFeed } from "./yt/rss.ts";
+import { FEED_CAP, HOME_PAGE, MAX_FEED_PAGE, decodeCursor, feedPage, parseFilter } from "./feed.ts";
+import { getPrefs, parsePrefs, setPrefs } from "./prefs.ts";
 import { TV_MIN_SUBS, MAX_SEEN_PARAM, TvLimiter, parseSeen, pickNext } from "./tv.ts";
 import { MAX_QUERY, search } from "./yt/search.ts";
 import { relatedFor } from "./yt/related.ts";
@@ -124,7 +126,7 @@ async function readProgress(req: IncomingMessage): Promise<{ id: string; positio
   };
 }
 
-/** Small form or JSON bodies (string/number values only); null when too large. */
+/** Small form or JSON bodies (string/number/boolean values only); null when too large. */
 async function readParams(req: IncomingMessage): Promise<Record<string, string> | null> {
   const raw = await readText(req);
   if (raw === null) return null;
@@ -136,7 +138,7 @@ async function readParams(req: IncomingMessage): Promise<Record<string, string> 
     } catch {
       o = undefined;
     }
-    for (const [k, v] of Object.entries(o && typeof o === "object" ? o : {})) if (typeof v === "string" || typeof v === "number") out[k] = String(v);
+    for (const [k, v] of Object.entries(o && typeof o === "object" ? o : {})) if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out[k] = String(v);
   } else {
     for (const [k, v] of new URLSearchParams(raw)) out[k] = v;
   }
@@ -234,10 +236,41 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     return void res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" }).end(statusPage(await statusReport()));
   }
 
+  /** One page of the merged feed, filtered by the query (absent options fall back to the saved preferences). */
+  const feedFor = async (subs: Awaited<ReturnType<typeof listSubs>>, limit: number, cursor: string) => {
+    const prefs = getPrefs();
+    const f = parseFilter(url.searchParams, prefs);
+    if ("error" in f) return { error: f.error };
+    const cur = cursor ? decodeCursor(cursor) : null;
+    if (cursor && !cur) return { error: "bad before" };
+    const all = await subscriptionFeed(f.channel ? subs.filter((s) => s.id === f.channel) : subs, FEED_CAP);
+    return { prefs, page: await feedPage({ all, facts: videoFacts, watched: watchedAmong }, f, limit, cur) };
+  };
+
   if (path === "/api/home") {
     const subs = await listSubs();
-    const feed = await subscriptionFeed(subs);
-    return json(res, 200, { subs, feed, continue: continueWatching() });
+    const r = await feedFor(subs, HOME_PAGE, "");
+    if ("error" in r) return json(res, 400, { error: r.error });
+    return json(res, 200, { subs, feed: r.page.items, next: r.page.next, prefs: r.prefs, continue: continueWatching() });
+  }
+
+  if (path === "/api/feed" && req.method === "GET") {
+    const limit = Number(param("limit") || HOME_PAGE);
+    if (!Number.isInteger(limit) || limit < 1 || limit > MAX_FEED_PAGE) return json(res, 400, { error: "bad limit" });
+    const r = await feedFor(await listSubs(), limit, param("before"));
+    if ("error" in r) return json(res, 400, { error: r.error });
+    return json(res, 200, r.page);
+  }
+
+  if (path === "/api/prefs") {
+    if (req.method === "GET") return json(res, 200, getPrefs());
+    if (req.method !== "POST") return json(res, 405, { error: "method not allowed" }, { allow: "GET, POST" });
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const p = await readParams(req);
+    if (!p) return json(res, 413, { error: "body too large" });
+    const parsed = parsePrefs(p);
+    if ("error" in parsed) return json(res, 400, { error: parsed.error });
+    return json(res, 200, setPrefs(parsed.update));
   }
 
   if (path === "/api/tv/status") {

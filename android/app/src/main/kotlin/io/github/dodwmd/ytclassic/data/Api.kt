@@ -85,6 +85,16 @@ class YtApi(
 ) {
     suspend fun home(): HomeResponse = get("api/home")
 
+    /** One page of the home feed: the first (no [before]) or the one after cursor [before]. Filters are always explicit. */
+    suspend fun feed(filter: FeedFilter, before: String? = null): FeedPage =
+        get("api/feed", *filter.query().toTypedArray(), "before" to before)
+
+    suspend fun prefs(): FeedPrefs = get("api/prefs")
+
+    suspend fun setPrefs(prefs: FeedPrefs): FeedPrefs = decode(execute(request(url("api/prefs")).post(
+        FormBody.Builder().add("hideWatched", if (prefs.hideWatched) "1" else "0").add("shorts", prefs.shorts).add("live", prefs.live).build(),
+    ).build()))
+
     suspend fun search(query: String, pageToken: String? = null): SearchPage =
         get("api/search", "q" to query, "pageToken" to pageToken)
 
