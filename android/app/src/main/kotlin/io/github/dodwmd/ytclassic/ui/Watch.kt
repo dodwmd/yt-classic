@@ -47,6 +47,17 @@ import io.github.dodwmd.ytclassic.data.joinParts
 import io.github.dodwmd.ytclassic.data.timeAgo
 import io.github.dodwmd.ytclassic.player.LocalPip
 import io.github.dodwmd.ytclassic.player.StreamPlayer
+import io.github.dodwmd.ytclassic.player.qualityPlan
+import io.github.dodwmd.ytclassic.player.screenShortSide
+import androidx.compose.ui.platform.LocalContext
+import io.github.dodwmd.ytclassic.App
+import kotlinx.coroutines.flow.first
+import io.github.dodwmd.ytclassic.player.withOffers
+import io.github.dodwmd.ytclassic.player.AUTO_QUALITY
+import io.github.dodwmd.ytclassic.data.QualitiesResponse
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import io.github.dodwmd.ytclassic.player.resumeStart
 
 @Composable
@@ -59,8 +70,17 @@ fun WatchScreen(
     // Survives leaving the screen and coming back (or the process being killed), so a detour doesn't lose your place.
     // A LongArray rather than state: it's written every few seconds and nothing should recompose for it.
     val resume = rememberSaveable(id) { longArrayOf(startSeconds) }
-    val loaded = rememberLoad(id) { api.video(id) }
-    LoadedContent(loaded) { r ->
+    val app = LocalContext.current.applicationContext as App
+    // The stored quality (or Auto) goes with the request so the server can answer for this screen and these decoders; the
+    // chips and the starting tier come from the answer plus what this device can decode.
+    val loaded = rememberLoad(id) {
+        val pref = app.settings.qualityPref.first()
+        val decoders = withContext(Dispatchers.Default) { app.host.decoders } // normally already warm (App starts it)
+        val screen = minOf(screenShortSide(app), decoders.best)
+        val response = api.video(id, pref, screen, decoders.codecsParam)
+        response to qualityPlan(response, pref, decoders, screen)
+    }
+    LoadedContent(loaded) { (r, plan) ->
         val v = r.video
         var expanded by remember(v.id) { mutableStateOf(false) }
         // Comments cost nothing until opened; the open state and the sort order survive rotation, the loaded pages live in the model.
@@ -82,6 +102,21 @@ fun WatchScreen(
         // PiP): recreating StreamPlayer would stop and restart playback, and the list would lose its scroll.
         // The movable lambdas outlive recompositions, so they read the latest values through these.
         val latest by rememberUpdatedState(r)
+        // The page data carries the usual tiers; the ones this video really has arrive separately and only change the chips.
+        var offers by remember(v.id) { mutableStateOf<QualitiesResponse?>(null) }
+        LaunchedEffect(v.id) {
+            if (!r.tiersKnown) {
+                offers = try {
+                    api.videoQualities(v.id, if (plan.auto) AUTO_QUALITY else plan.quality, plan.screen, app.host.decoders.codecsParam)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null // the usual chips stay
+                }
+            }
+        }
+        val shownPlan = offers?.takeIf { it.tiersKnown }?.let { withOffers(plan, it.qualities, it.codecs, app.host.decoders) } ?: plan
+        val planNow by rememberUpdatedState(shownPlan)
         val fullscreenNow by rememberUpdatedState(fullscreen)
         val onFullscreenNow by rememberUpdatedState(onFullscreen)
         val onVideoNow by rememberUpdatedState(onVideo)
@@ -94,7 +129,10 @@ fun WatchScreen(
                 // Computed when the player is mounted: if it is ever recreated it resumes from where it was, not from the first start.
                 val begin = remember { resumeStart(resume[0], cur.progress, cur.video.durationSeconds ?: 0L) }
                 if (showPlayer(cur.playable, cur.reason, override)) {
-                    StreamPlayer(cur.video, cur.quality, cur.qualities, cur.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) })
+                    StreamPlayer(
+                        cur.video, planNow.quality, planNow.chips, cur.lang, begin, onPosition = { resume[0] = it },
+                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto, screenHeight = planNow.screen,
+                    )
                 } else {
                     Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                         Text(shortMessage(cur.message.ifBlank { "This video can't be played." }), color = MaterialTheme.colorScheme.error)

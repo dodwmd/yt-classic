@@ -121,8 +121,26 @@ class YtApi(
         execute(request(url("api/searches")).delete().build()).use { check(it) }
     }
 
-    suspend fun video(id: String, quality: Int? = null): VideoResponse =
-        get("api/video/$id", "q" to quality?.toString())
+    /**
+     * [quality]: a height, [io.github.dodwmd.ytclassic.player.AUTO_QUALITY] for Auto, or null for the server's default.
+     * [maxHeight] and [codecs] (this device's decoders, e.g. "avc1,vp9") only matter for Auto and heights above 1080p.
+     */
+    suspend fun video(id: String, quality: Int? = null, maxHeight: Int? = null, codecs: String? = null): VideoResponse =
+        get("api/video/$id", *qualityQuery(quality, maxHeight, codecs))
+
+    /** The tiers this video really has. The server may take a few seconds (it asks yt-dlp), so this is not part of [video]. */
+    suspend fun videoQualities(id: String, quality: Int? = null, maxHeight: Int? = null, codecs: String? = null, lang: String = ""): QualitiesResponse =
+        get("api/video/$id/qualities", *qualityQuery(quality, maxHeight, codecs), "a" to lang.ifEmpty { null })
+
+    private fun qualityQuery(quality: Int?, maxHeight: Int?, codecs: String?): Array<Pair<String, String?>> {
+        val auto = quality == 0
+        val needsCaps = auto || (quality ?: 0) > 1080
+        return arrayOf(
+            "q" to (if (auto) "auto" else quality?.toString()),
+            "maxh" to maxHeight?.toString()?.takeIf { auto },
+            "codecs" to codecs?.takeIf { needsCaps },
+        )
+    }
 
     suspend fun channel(id: String, pageToken: String? = null): ChannelResponse =
         get("api/channel/$id", "pageToken" to pageToken)
@@ -150,8 +168,8 @@ class YtApi(
     suspend fun status(): StatusResponse = get("api/status")
 
     /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */
-    suspend fun tvNext(after: String, seen: List<String>, quality: Int? = null): TvResponse =
-        get("api/tv/next", "after" to after.ifEmpty { null }, "seen" to seen.joinToString(",").ifEmpty { null }, "q" to quality?.toString())
+    suspend fun tvNext(after: String, seen: List<String>, quality: Int? = null, maxHeight: Int? = null, codecs: String? = null): TvResponse =
+        get("api/tv/next", "after" to after.ifEmpty { null }, "seen" to seen.joinToString(",").ifEmpty { null }, *qualityQuery(quality, maxHeight, codecs))
 
     suspend fun setSubscribed(channelId: String, subscribe: Boolean): Boolean {
         val body = FormBody.Builder().add("id", channelId).build()
@@ -274,8 +292,8 @@ class YtApi(
     suspend fun streamAuthorization(): String? = token().trim().takeIf { it.isNotEmpty() }?.let { "Bearer $it" }
 
     /** The live stream; [startSeconds] restarts it at that offset (the backend remuxes on the fly, so seeking = restarting). */
-    suspend fun streamUrl(id: String, quality: Int, startSeconds: Long = 0, lang: String = ""): String =
-        url("stream/$id", "q" to quality.toString(), "a" to lang.ifEmpty { null }, "t" to startSeconds.takeIf { it > 0 }?.toString()).toString()
+    suspend fun streamUrl(id: String, quality: Int, startSeconds: Long = 0, lang: String = "", codecs: String? = null): String =
+        url("stream/$id", "q" to quality.toString(), "a" to lang.ifEmpty { null }, "t" to startSeconds.takeIf { it > 0 }?.toString(), "codecs" to codecs?.takeIf { quality > 1080 }).toString()
 
     private suspend fun url(path: String, vararg query: Pair<String, String?>): HttpUrl {
         val base = normalizeServerUrl(server()) ?: throw ApiException("Set the server address in Settings first.")

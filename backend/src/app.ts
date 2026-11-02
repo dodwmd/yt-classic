@@ -1,9 +1,10 @@
+import { envInt } from "./env.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video, videoFacts } from "./yt/api.ts";
-import { QUALITIES, VIDEO_ID, knownUnplayable, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
+import { VIDEO_ID, baseQualities, knownOffered, knownUnplayable, parseLang, requestedQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { QuotaError, tabRequestWait } from "./tabquota.ts";
 import { commentRequestWait } from "./commentquota.ts";
 import { THREAD_ID, commentReplies, commentsKnownOff, videoComments } from "./yt/comments.ts";
@@ -39,6 +40,9 @@ const TYPES: Record<string, string> = {
 
 /** Test seam: replaced by the tests to reset the request limit. */
 export let tvLimiter = new TvLimiter();
+/** How long /api/video/:id/qualities waits for the resolve that tells it the video's tiers. */
+const offerWaitMs = () => envInt("OFFER_WAIT_MS", 4000); // env only so tests need not wait 4 s
+
 export function resetTvLimiter(): void {
   tvLimiter = new TvLimiter();
 }
@@ -314,9 +318,9 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const v = await pickNext({ subs, after, seen: parseSeen(seenRaw), watched: watchedAmong, feed: channelFeed, video, rand: Math.random, signal: gone.signal });
     if (gone.signal.aborted) return;
     if (!v) return json(res, 404, { error: "Could not find anything playable right now.", code: "nothing-playable" });
-    const quality = parseQuality(url.searchParams.get("q"));
-    resolveUrls(v.id, quality, "").catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
-    return json(res, 200, { video: v, channelId: v.channelId, quality, qualities: QUALITIES, lang: "", progress: getProgress(v.id) ?? undefined });
+    const { quality, codecs } = requestedQuality(url.searchParams);
+    resolveUrls(v.id, quality, "", codecs).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
+    return json(res, 200, { video: v, channelId: v.channelId, quality, qualities: baseQualities(), lang: "", progress: getProgress(v.id) ?? undefined });
   }
 
   if (path === "/api/search/suggest") {
@@ -391,22 +395,45 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     }
   }
 
+  const qualitiesRoute = /^\/api\/video\/([^/]+)\/qualities$/.exec(path);
+  if (qualitiesRoute) {
+    // Which tiers (and codecs) the video has. Shares the resolve that /api/video prewarmed, waiting for it up to 4 s.
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { allow: "GET" });
+    const id = qualitiesRoute[1];
+    if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
+    const { quality, codecs } = requestedQuality(url.searchParams);
+    const known = knownOffered(id);
+    if (!known && !knownUnplayable(id)) {
+      let timer: NodeJS.Timeout | undefined;
+      let leave = () => {};
+      const stop = new Promise<void>((r) => (leave = r));
+      res.once("close", leave); // the viewer left: stop waiting (the resolve itself is shared and carries on)
+      await Promise.race([resolveUrls(id, quality, parseLang(url.searchParams.get("a")), codecs).catch(() => {}), stop, new Promise((r) => (timer = setTimeout(r, offerWaitMs())))]);
+      clearTimeout(timer);
+      if (res.destroyed) return;
+    }
+    const offered = known ?? knownOffered(id);
+    return json(res, 200, { qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered });
+  }
+
   if (path.startsWith("/api/video/")) {
     const id = path.slice("/api/video/".length);
     if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
     const v = await video(id);
     if (!v) return classified(res, "removed", "Video not found: it may have been removed or made private.");
-    const quality = parseQuality(url.searchParams.get("q"));
+    const { quality, auto, codecs } = requestedQuality(url.searchParams);
     const a = url.searchParams.get("a");
     const lang = parseLang(a);
-    resolveUrls(id, quality, lang).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
+    resolveUrls(id, quality, lang, codecs).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
+    const offered = knownOffered(id); // only when an earlier resolve already learned them; GET /api/video/:id/qualities waits for the rest
     refreshMeta({ id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });
     const related = await relatedFor(v);
     const progress = getProgress(id) ?? undefined; // omitted when nothing is known
     // Playability hint, only when something already says it can't be played (Data API metadata or a recent yt-dlp failure).
     const reason = v.unplayable ?? knownUnplayable(id);
     const hint = reason ? { playable: false, reason, message: INFO[reason].message } : {};
-    return json(res, 200, { video: v, related, quality, qualities: QUALITIES, lang: a && lang === a ? a : "", progress, ...hint });
+    return json(res, 200, { video: v, related, quality, auto, qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered, lang: a && lang === a ? a : "", progress, ...hint });
   }
 
   if (path === "/api/history" && req.method === "GET") {
@@ -618,15 +645,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
   if (path.startsWith("/stream/")) {
     const id = path.slice("/stream/".length);
     if (!VIDEO_ID.test(id)) return void res.writeHead(400, text).end("bad video id");
-    const quality = parseQuality(url.searchParams.get("q"));
+    const { quality, codecs } = requestedQuality(url.searchParams);
     const lang = parseLang(url.searchParams.get("a"));
     if (url.searchParams.get("probe") === "1") {
       // The web player's way to learn why a stream failed: resolves exactly like a stream (a recent failure is reused)
       // and answers JSON, but never starts ffmpeg, takes a stream slot or counts as a stream.
-      await resolveUrls(id, quality, lang);
+      await resolveUrls(id, quality, lang, codecs);
       return json(res, 200, { ok: true });
     }
-    return await streamLive(id, quality, lang, parseStart(url.searchParams.get("t")), req, res);
+    return await streamLive(id, quality, lang, codecs, parseStart(url.searchParams.get("t")), req, res);
   }
 
   if (path.startsWith("/api/")) return json(res, 404, { error: "not found" });

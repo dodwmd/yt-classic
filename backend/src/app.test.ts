@@ -49,7 +49,7 @@ before(async () => {
 case "$*" in *zeroresults*) echo '{"entries":[]}'; exit 0;; esac
 case "$*" in *sp=EgIQAg*) echo '{"entries":[{"id":"${tvChan("c")}","channel_id":"${tvChan("c")}","channel":"Chan C","uploader_id":"@chanc","channel_follower_count":1234,"description":"About C","thumbnails":[{"url":"//yt3.ggpht.com/a=s88","width":88},{"url":"//yt3.ggpht.com/a=s176","width":176}]},{"id":"${VID}","title":"a video, not a channel"}]}'; exit 0;; esac
 if [ "$mode" = g ] && [ -n "$FAKE_YTDLP_ERR" ]; then printf '%s\\n' "$FAKE_YTDLP_ERR" >&2; exit 1
-elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; echo https://example.invalid/v; echo https://example.invalid/a
+elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; [ -n "$FAKE_YTDLP_FMT" ] && echo "YTFMT $FAKE_YTDLP_FMT"; echo https://example.invalid/v; echo https://example.invalid/a
 else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","channel":"Chan","channel_id":"${CHANNEL}","duration":65,"view_count":10}]}'; fi`,
   );
   process.env.FFMPEG_BIN = script("ffmpeg", `echo $$ > "$PIDFILE"; printf xxxx; exec sleep 30`);
@@ -1130,4 +1130,58 @@ test("a flood of searches gets 503s, spends no Data API quota and leaves playbac
   assert.ok(codes.filter((c) => c === 200).length >= 2, codes.join());
   assert.equal(apiSearchCalls, 0, "busy is not a broken yt-dlp: no Data API quota");
   assert.equal(out.find((r) => r.status === 503)!.headers["retry-after"], "5");
+});
+
+test("/api/video answers at once with the usual tiers; /qualities waits for the tiers, with codec hints; Auto follows maxh and codecs; MAX_QUALITY caps", async () => {
+  process.env.FAKE_YTDLP_FMT = '[{"height":2160,"width":3840,"vcodec":"vp9","protocol":"https"},{"height":1080,"width":1920,"vcodec":"avc1.640028","protocol":"https"},{"height":720,"width":1280,"vcodec":"avc1.4d401f","protocol":"https"}]';
+  process.env.FAKE_RESOLVE_SLEEP = "1";
+  try {
+    const t0 = Date.now();
+    const first = JSON.parse((await get("/api/video/QUALITY0001?q=2160")).body);
+    assert.ok(Date.now() - t0 < 900, "the page data does not wait for yt-dlp");
+    assert.deepEqual(first.qualities, [360, 480, 720, 1080]);
+    assert.deepEqual([first.codecs, first.tiersKnown, first.quality, first.auto], [{}, false, 2160, false]);
+    const hi = JSON.parse((await get("/api/video/QUALITY0001/qualities?q=2160")).body); // shares the prewarm that is still running
+    assert.deepEqual(hi.qualities, [720, 1080, 2160]);
+    assert.deepEqual(hi.codecs, { "720": ["avc1"], "1080": ["avc1"], "2160": ["vp9"] });
+    assert.equal(hi.tiersKnown, true);
+    assert.equal(resolveCalls() > 0, true);
+    // Now cached: /api/video carries them too, and /qualities answers without a new run.
+    const runs = resolveCalls();
+    const again = JSON.parse((await get("/api/video/QUALITY0001?q=2160")).body);
+    assert.deepEqual([again.qualities, again.tiersKnown], [[720, 1080, 2160], true]);
+    assert.deepEqual(JSON.parse((await get("/api/video/QUALITY0001/qualities?q=2160")).body).qualities, [720, 1080, 2160]);
+    assert.equal(resolveCalls(), runs);
+    const auto = JSON.parse((await get("/api/video/QUALITY0001?q=auto&maxh=1440&codecs=avc1,vp9")).body);
+    assert.deepEqual([auto.quality, auto.auto], [1440, true]);
+    assert.equal(JSON.parse((await get("/api/video/QUALITY0001?q=auto&maxh=2160&codecs=avc1")).body).quality, 1080);
+    process.env.MAX_QUALITY = "1080";
+    const capped = JSON.parse((await get("/api/video/QUALITY0003?q=2160")).body);
+    assert.deepEqual([capped.qualities, capped.quality], [[360, 480, 720, 1080], 1080], "a quality above the cap is lowered to it");
+    delete process.env.MAX_QUALITY;
+    // Bad input and the wrong method.
+    assert.equal((await get("/api/video/bad/qualities")).status, 400);
+    assert.equal((await get("/api/video/QUALITY0001/qualities", { method: "POST" })).status, 405);
+  } finally {
+    delete process.env.FAKE_YTDLP_FMT;
+    delete process.env.FAKE_RESOLVE_SLEEP;
+    delete process.env.MAX_QUALITY;
+  }
+});
+
+test("/qualities gives up waiting after the timeout and answers the usual tiers; a video yt-dlp printed no list for keeps them", async () => {
+  process.env.FAKE_RESOLVE_SLEEP = "2";
+  process.env.OFFER_WAIT_MS = "200";
+  try {
+    const t0 = Date.now();
+    const r = JSON.parse((await get("/api/video/QUALITY0004/qualities")).body);
+    assert.ok(Date.now() - t0 < 1500, "did not wait for the slow resolve");
+    assert.deepEqual([r.qualities, r.codecs, r.tiersKnown], [[360, 480, 720, 1080], {}, false]);
+  } finally {
+    delete process.env.FAKE_RESOLVE_SLEEP;
+    delete process.env.OFFER_WAIT_MS;
+  }
+  await sleep(2300); // let the slow resolve finish before the next test
+  const plain = JSON.parse((await get("/api/video/QUALITY0005/qualities")).body);
+  assert.deepEqual([plain.qualities, plain.codecs, plain.tiersKnown], [[360, 480, 720, 1080], {}, false]);
 });

@@ -28,6 +28,12 @@ jobs:
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
+      - name: Install ffmpeg (the remux tests encode tiny VP9/AV1/Opus clips and run the real ffmpeg; they must not be skipped in CI)
+        working-directory: .
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg
+          ffmpeg -hide_banner -encoders | grep -E "libvpx-vp9|libopus|libaom-av1|libsvtav1"
       - name: Lint
         run: npm run lint
       - name: Type check

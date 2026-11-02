@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
@@ -17,6 +18,7 @@ private val ACCESS_TOKEN = stringPreferencesKey("access_token")
 private val PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
 private val BACKGROUND_AUDIO = booleanPreferencesKey("background_audio")
 private val PICTURE_IN_PICTURE = booleanPreferencesKey("picture_in_picture")
+private val QUALITY_PREF = intPreferencesKey("quality_pref")
 private val AUTO_UPDATE_CHECK = booleanPreferencesKey("auto_update_check")
 private val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
 
@@ -62,6 +64,13 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setPlaybackSpeed(speed: Float) {
         context.dataStore.edit { it[PLAYBACK_SPEED] = clampSpeed(speed) }
+    }
+
+    /** The quality last chosen in the player (0 = Auto), the default for new videos; null until the user picks one. */
+    val qualityPref: Flow<Int?> = context.dataStore.data.map { it[QUALITY_PREF] }
+
+    suspend fun setQualityPref(q: Int) {
+        context.dataStore.edit { it[QUALITY_PREF] = q }
     }
 
     /** Check GitHub for a new release once a week when the app starts. Off by default: the check contacts GitHub. */

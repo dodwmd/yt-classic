@@ -27,5 +27,5 @@ test("parseLang / formatSelector prefer the requested audio language", () => {
   assert.equal(parseLang(null), "en");
   const sel = formatSelector(720, "en");
   assert.ok(sel.indexOf("language^=en") < sel.indexOf("ba[ext=m4a]/"));
-  assert.ok(sel.includes("/b[height<=720]"));
+  assert.ok(sel.includes("/b[aspect_ratio>=?1][height<=720]"));
 });

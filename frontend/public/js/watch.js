@@ -1,4 +1,4 @@
-import { $, api, channelHref, clone, explain, fillRow, laterButton, markWatched, reportProgress, run, setTitle, thumbUrl, watchHref } from "./lib.js";
+import { $, api, channelHref, clone, explain, fillRow, laterButton, markWatched, reportProgress, run, setTitle, thumbUrl } from "./lib.js";
 import { formatViews, join, timeAgo, viewsText } from "./fmt.js";
 import { initPlayer } from "./player.js";
 
@@ -9,14 +9,20 @@ const explicit = params.has("t") ? Math.max(0, Math.floor(Number(params.get("t")
 run(async () => {
   const query = new URLSearchParams();
   for (const k of ["q", "a"]) if (params.get(k)) query.set(k, params.get(k));
-  const { video: v, related, quality, qualities, lang, progress, playable, message } = await api(`/api/video/${encodeURIComponent(id)}?${query}`);
+  // quality.js (loaded on demand, also for the menu below) adds the remembered quality and, for Auto and 4K, this browser's decoders.
+  const qm = await import("./quality.js").catch(() => null);
+  const caps = qm?.prefs(query);
+  const res = await api(`/api/video/${encodeURIComponent(id)}?${query}`);
+  const { video: v, related, quality, lang, progress, playable, message } = res;
 
   const start = explicit ?? (progress && !progress.completed ? progress.position : 0);
   setTitle(v.title);
   $("#watch").hidden = false;
   $("#title").textContent = v.title;
 
-  const base = `/stream/${encodeURIComponent(v.id)}?q=${quality}${lang ? `&a=${encodeURIComponent(lang)}` : ""}`;
+  // Above 1080p the server needs to know which codecs this browser decodes (c = caps.codecs).
+  const stream = (n, c) => `/stream/${encodeURIComponent(v.id)}?q=${n}${lang ? `&a=${encodeURIComponent(lang)}` : ""}${c && n > 1080 ? `&codecs=${c}` : ""}`;
+  const base = stream(quality, caps?.codecs);
   const player = $("#player");
   player.dataset.duration = v.durationSeconds || 0;
   player.dataset.src = base;
@@ -33,20 +39,16 @@ run(async () => {
     const now = initPlayer(player);
     if (now) reportProgress(video, now, { id: v.id });
     video.addEventListener("error", () => explainFailure(video));
+    return now;
   };
+  let now;
   if (playable === false) {
     $("#try").hidden = false;
-    $("#try").onclick = () => { $("#try").hidden = $("#status").hidden = true; mount(); };
-  } else mount();
+    $("#try").onclick = () => { $("#try").hidden = $("#status").hidden = true; now = mount(); };
+  } else now = mount();
 
-  const extra = lang ? `&a=${encodeURIComponent(lang)}` : "";
-  qualities.forEach((h, i) => {
-    if (i) $("#quality").append(" · ");
-    const el = document.createElement(h === quality ? "b" : "a");
-    el.textContent = `${h}p`;
-    if (h !== quality) el.href = watchHref(v.id, `&q=${h}${extra}`);
-    $("#quality").append(el);
-  });
+  // Changing quality restarts the stream in place (no page load); the menu is a lazy module.
+  qm?.qualityMenu({ res, query: String(query), stream, player, ready: () => !!now?.restart, restart: (t) => now.restart(t), now: () => now() });
 
   $("#chan").textContent = v.channelTitle;
   $("#chan").href = channelHref(v.channelId);

@@ -23,6 +23,7 @@ import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.HttpDataSource
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
@@ -35,6 +36,7 @@ import io.github.dodwmd.ytclassic.data.errorBodyOf
 import io.github.dodwmd.ytclassic.data.shortMessage
 import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.delay
@@ -42,6 +44,11 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlin.math.min
+
+/** Upper bound for ExoPlayer's buffer in bytes (about 48 MB). */
+private const val BUFFER_BYTES = 48 * 1024 * 1024
 
 /**
  * Owns the one ExoPlayer for the whole process, so playback outlives the watch screen (and the activity) while the
@@ -61,7 +68,13 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
     private val streamClient = streamClient()
     private val dataSources = DataSource.Factory { AuthDataSource(streamClient, { streamOrigin }, { streamAuth }) }
 
+    // 4K streams buffer a lot per second: cap the buffer in bytes (and let that cap win over the time target) so a 1-2 GB device is not pushed out of memory.
+    private val loadControl = DefaultLoadControl.Builder()
+        .setTargetBufferBytes(BUFFER_BYTES)
+        .setPrioritizeTimeOverSizeThresholds(false)
+        .build()
     private val exo = ExoPlayer.Builder(context)
+        .setLoadControl(loadControl)
         .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources).setLoadErrorHandlingPolicy(StreamErrorPolicy()))
         // Take audio focus (pause for calls, duck for prompts, stop other media) and pause when headphones are unplugged.
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
@@ -83,6 +96,21 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         private set
     var quality by mutableIntStateOf(0)
         private set
+    /** The user is on Auto: [quality] is the tier Auto picked for this video. */
+    var auto by mutableStateOf(false)
+        private set
+    /** This device's hardware decoders; read once (the query is not free: App warms it off the main thread at start). */
+    val decoders: Decoders by lazy { deviceDecoders() }
+    /** The chips the screen shows for the current video (set by the player UI); where a failing tier steps down to. */
+    @Volatile var chips: List<Int> = emptyList()
+    /** The tallest tier still allowed for this video: a tier this device failed to decode is not offered or retried. */
+    var ceiling by mutableIntStateOf(Int.MAX_VALUE)
+        private set
+    /** Why the quality changed by itself (a tier the device could not decode), until the next choice. */
+    var qualityNotice by mutableStateOf<String?>(null)
+        private set
+    /** The quality to remember once a frame of it has been shown (a tier that fails to start must not become the default). */
+    private var pendingPref: Int? = null
     /** Playback speed (media time per real time); the persisted default, applied to every video. Pitch stays corrected (ExoPlayer's default). */
     var speed by mutableFloatStateOf(1f)
         private set
@@ -203,6 +231,12 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
                 if (reportsOnPause(isPlaying, exo.playWhenReady, seek.restarting)) reportProgress() // paused or stopped
             }
 
+            override fun onRenderedFirstFrame() {
+                val p = pendingPref ?: return
+                pendingPref = null
+                scope.launch { settings.setQualityPref(p) } // app scope: outlives the watch screen
+            }
+
             override fun onVideoSizeChanged(videoSize: VideoSize) {
                 this@PlaybackHost.videoSize = videoSize
             }
@@ -225,6 +259,16 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
 
             override fun onPlayerError(e: PlaybackException) {
                 if (seek.restarting) return // the old stream failing doesn't matter, it is being replaced
+                if (isDecoderFailure(e.errorCode)) {
+                    // This device cannot decode the tier: step down one and carry on from here; a retry must not repeat it.
+                    val lower = nextLowerChip(chips.filter { it <= ceiling }.ifEmpty { TIER_LIST.filter { it <= quality } }, quality)
+                    if (lower != null) {
+                        ceiling = lower
+                        qualityNotice = "This device couldn't decode ${quality}p; switched to ${lower}p."
+                        if (pendingPref != null) pendingPref = if (auto) AUTO_QUALITY else lower
+                        return load(positionSeconds(), lower, play = true)
+                    }
+                }
                 buffering = false
                 val http = e.cause as? HttpDataSource.InvalidResponseCodeException
                 needsToken = http?.responseCode == 401
@@ -263,21 +307,24 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
     }
 
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
-    fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
+    fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, initialAuto: Boolean = false) {
         if (video?.id == v.id) return
         endTv() // the user chose a video themselves: nothing may take over when it ends
-        begin(v, initialQuality, audioLang, startSeconds)
+        begin(v, initialQuality, audioLang, startSeconds, auto = initialAuto)
         screenAttached = true
     }
 
     /** [handOver]: TV moving on to the next video; the old stream is not paused first, so the session never looks paused. */
-    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, handOver: Boolean = false) {
+    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, handOver: Boolean = false, auto: Boolean = this.auto) {
+        ceiling = Int.MAX_VALUE
+        qualityNotice = null
+        pendingPref = null
         if (video != null) reportProgress() // switching videos: save where the previous one stopped
         lastReported = -1L
         video = v
         lang = audioLang
         seek = StreamSeek(v.durationSeconds ?: 0L, startSeconds)
-        load(startSeconds, initialQuality, play = true, silence = !handOver)
+        load(startSeconds, initialQuality, play = true, silence = !handOver, auto = auto)
     }
 
     /**
@@ -348,7 +395,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
             is TvStep.Play -> {
                 if (!canStartPlayback(appVisible, keepInBackground)) return stopTv(TV_BACKGROUND_MESSAGE)
                 playedTicks = 0
-                begin(step.pick.video, quality.takeIf { it > 0 } ?: step.pick.quality, "", 0, handOver = true)
+                begin(step.pick.video, playableTier(step.pick.quality, decoders), "", 0, handOver = true, auto = step.pick.auto)
             }
             is TvStep.Stop -> stopTv(step.message, step.needsToken)
         }
@@ -361,8 +408,16 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
             if (step.delayMs > 0) delay(step.delayMs)
             holdTvWake()
             val outcome = try {
-                val r = api.tvNext(session.after, session.seen, quality.takeIf { it > 0 })
-                session.onFetched(step.ticket, TvPick(r.video, r.channelId.ifEmpty { r.video.channelId }, r.quality))
+                // The stored choice (or Auto) applies to TV too; once a video has played, its tier carries on.
+                val wantAuto = if (quality > 0) auto else settings.qualityPref.first() == AUTO_QUALITY
+                val wantQuality = when {
+                    wantAuto -> AUTO_QUALITY
+                    quality > 0 -> quality
+                    else -> settings.qualityPref.first()
+                }
+                val d = withContext(Dispatchers.Default) { decoders }
+                val r = api.tvNext(session.after, session.seen, wantQuality, min(screenShortSide(context), d.best), d.codecsParam)
+                session.onFetched(step.ticket, TvPick(r.video, r.channelId.ifEmpty { r.video.channelId }, r.quality, wantAuto))
             } catch (e: CancellationException) {
                 throw e
             } catch (e: AuthException) {
@@ -427,6 +482,15 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         }
     }
 
+    /** The user picked a quality chip ([auto]: the Auto chip, whose tier is [q]): restarts here at that tier; it becomes the default for new videos once it has played. */
+    fun chooseQuality(q: Int, auto: Boolean) {
+        if (q == quality && auto == this.auto) return
+        qualityNotice = null
+        // Remembered as the default only once a frame has been shown at this tier (see onRenderedFirstFrame).
+        pendingPref = if (auto) AUTO_QUALITY else q
+        load(positionSeconds(), q, auto = auto)
+    }
+
     /** Absolute position in whole seconds. */
     fun positionSeconds(): Long = if (finished) seek.totalSeconds else seek.positionMs(exo.currentPosition) / 1000
 
@@ -435,11 +499,12 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
      * stream is silenced at once, the base offset only moves when the new stream is handed to the player, and only
      * the newest request may reach the player: a quick second seek must not be overtaken by the first.
      */
-    fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true) {
+    fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true, auto: Boolean = this.auto) {
         val v = video ?: return
         pendingPlay = play ?: playIntent
         intentVersion++
         quality = q
+        this.auto = auto
         error = null
         errorCode = null
         needsToken = false
@@ -451,7 +516,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         loading?.cancel()
         loading = scope.launch {
             try {
-                val url = api.streamUrl(v.id, q, start, lang)
+                val url = api.streamUrl(v.id, q, start, lang, decoders.codecsParam)
                 streamOrigin = origin(url)
                 streamAuth = api.streamAuthorization()
                 loadSpeed()

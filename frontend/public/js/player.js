@@ -23,19 +23,22 @@ export function initPlayer(root, onended) {
     time.textContent = `${fmt(dragging ? bar.value : now())} / ${fmt(total)}`;
     pp.textContent = v.paused ? "▶" : "❚❚";
   };
+  // A new stream from t (also what a quality change does: root.dataset.src is then the new quality's URL).
+  const restart = (t) => {
+    const paused = v.paused;
+    base = Math.floor(t);
+    if (paused) { // restarting must not start playback: the autoplay attribute would, until the new stream has loaded
+      v.autoplay = false;
+      v.addEventListener("loadeddata", () => (v.autoplay = true), { once: true });
+    }
+    v.src = `${root.dataset.src}&t=${base}`;
+    if (!paused) v.play().catch(() => {});
+    paint();
+  };
   const seek = (t) => {
     t = Math.min(Math.max(0, t), total - 1);
     if (buffered(t - base)) v.currentTime = t - base;
-    else {
-      const paused = v.paused;
-      base = Math.floor(t);
-      if (paused) { // restarting must not start playback: the autoplay attribute would, until the new stream has loaded
-        v.autoplay = false;
-        v.addEventListener("loadeddata", () => (v.autoplay = true), { once: true });
-      }
-      v.src = `${root.dataset.src}&t=${base}`;
-      if (!paused) v.play().catch(() => {});
-    }
+    else restart(t);
     paint();
   };
   const toggle = () => (v.paused ? v.play().catch(() => {}) : v.pause());
@@ -61,6 +64,7 @@ export function initPlayer(root, onended) {
     else if (e.key === "ArrowRight") seek(now() + 10);
   });
   v.addEventListener("ended", () => onended?.());
+  now.restart = restart;
   now.reset = () => { // root.dataset.duration/start/src now describe a new video
     total = Number(root.dataset.duration);
     base = Number(root.dataset.start) || 0;
