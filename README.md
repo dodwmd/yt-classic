@@ -50,7 +50,7 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   GET form controls, so a results URL can be shared) and as chips in the Android app. Channel results have a
   Subscribe/Unsubscribe button and are marked when you already follow them. The search box suggests as you type and
   offers your recent searches when it is empty; see [Search, suggestions and recent searches](#search-suggestions-and-recent-searches).
-- **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar, a playback speed selector (0.5x to 2x, remembered in the browser; `<` and `>` change it) and double-click/double-tap on the left or right third of the video to seek 10 s (repeated taps add up; the single tap still plays/pauses). The speed code is the lazily loaded `speed.js`.
+- **Watch page**: playback in a plain `<video>` tag, a related-videos list, a quality menu (360p up to 4K where the video has it, plus Auto; changing it restarts the stream in place at the current position, with no page load, and is remembered in the browser) and a seek bar, a playback speed selector (0.5x to 2x, remembered in the browser; `<` and `>` change it) and double-click/double-tap on the left or right third of the video to seek 10 s (repeated taps add up; the single tap still plays/pauses). The speed code is the lazily loaded `speed.js`.
 - **Watch history and resume**: the watch page reports your position every ~10 s (and on pause, end and leaving), so a
   video resumes where you left off across restarts and devices. The home page has a "Continue watching" row with a
   progress bar, videos watched to the end get a "Watched" badge in the feed, search, channel and related lists, and
@@ -572,6 +572,7 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `REQUIRE_AUTH` | unset | `1` = refuse to start unless a valid `ACCESS_TOKEN` is set |
 | `ALLOWED_HOSTS` | unset (any; a warning is logged at start) | Comma-separated `Host` header values to accept, e.g. `192.168.1.10:8080`; others get 421. Set it: it blocks DNS-rebinding |
 | `MAX_STREAMS` | `3` | Concurrent video streams; extra requests get 503 |
+| `MAX_QUALITY` | `2160` | Highest quality the server will fetch (360, 480, 720, 1080, 1440 or 2160); lower it to limit bandwidth |
 | `STREAM_MAX_SECONDS` | `21600` | Hard cap on one stream's duration |
 | `SEARCH_FALLBACK_MAX` | `20` | Daily cap on Data API searches (100 quota units each), including their follow-on pages |
 | `TAB_UNITS_MAX` | `500` | Daily Data API units the channel tab routes may use (1-2 units a fetch); more gets 429 |
@@ -581,7 +582,7 @@ Environment variables, read from `backend/.env` in dev and in compose:
 
 The numeric settings must be whole numbers; anything else is logged and the default is used.
 
-URL parameters on the watch page: `q` (quality: 360, 480, 720, 1080), `t` (start offset in seconds), `a` (audio
+URL parameters on the watch page: `q` (quality: 360, 480, 720, 1080, 1440, 2160 or `auto`), `t` (start offset in seconds), `a` (audio
 language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 
 ### Search, suggestions and recent searches
@@ -796,3 +797,19 @@ shell.nix                dev shell
 [0BSD](LICENSE) (BSD Zero Clause): do whatever you like with this code, with no conditions and no need to keep any
 notice. It comes with no warranty. This covers the code in this repository only, not YouTube's content or terms, and
 not yt-dlp or ffmpeg, which have their own licenses.
+
+## Quality: 1440p, 4K and Auto
+
+`GET /api/video/:id?q=<360|480|720|1080|1440|2160|auto>&maxh=<px>&codecs=<avc1,vp9,av1>` and the same `q`, `codecs` on
+`/stream/:id`. Up to 1080p the stream is H.264 + AAC when the video has it. Above 1080p YouTube only has VP9 and AV1, so
+those are fetched (VP9 before AV1, AAC audio when present, else Opus) and remuxed with `ffmpeg -c copy` into fragmented MP4
+(no transcoding; VP9, AV1 and Opus in MP4 are verified by a real ffmpeg test). `codecs` is what the client can decode;
+it defaults to all, and without VP9/AV1 nothing above 1080p is requested. `q=auto` picks the tallest tier that fits `maxh`
+(the display's shorter side in pixels; default 1080), capped at 1080p unless `codecs` has VP9 or AV1. The response has
+`quality` (the concrete tier), `auto`, `qualities` (only the tiers the video really has, read from the same yt-dlp run that
+prewarms the stream, so no extra lookup; the usual 360 to 1080 when unknown) and `codecs` (per tier: `avc1`, `vp9`, `av1`)
+so clients hide tiers they cannot decode. `/api/video/:id` waits up to 4 s for that run. `MAX_QUALITY` caps everything.
+The clients remember the choice: the web in `localStorage`, Android in DataStore (new videos start at the best available
+tier at or below it). Caveat: a 4K stream is a lot of bandwidth (often 15 to 40 Mbit/s); the backend only copies it, so
+CPU stays low, but `MAX_STREAMS` 4K streams need that much upstream and downstream. Android offers 1440p/2160p only if a
+hardware VP9/AV1 decoder supports the size; the chip row scrolls sideways.

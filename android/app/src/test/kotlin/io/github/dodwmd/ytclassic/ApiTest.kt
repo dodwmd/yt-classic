@@ -51,6 +51,7 @@ class ApiTest {
                 path == "/api/searches" && ex.requestMethod == "GET" -> 200 to fixture("searches")
                 path == "/api/searches" && ex.requestMethod == "DELETE" -> 200 to """{"removed":1}"""
                 path.startsWith("/api/searches/") && ex.requestMethod == "DELETE" -> 200 to """{"removed":true}"""
+                path == "/api/video/dQw4w9WgXcQ" && "q=auto" in ex.requestURI.query.orEmpty() -> 200 to fixture("video-4k")
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
                 path == "/api/video/private0001" -> 404 to """{"error":"This video is private.","code":"private","retryable":false}"""
                 path == "/api/video/limited0001" -> 429 to """{"error":"YouTube is limiting requests right now. Try again in a while.","code":"rate-limited","retryable":true}"""
@@ -181,6 +182,23 @@ class ApiTest {
     }
 
     @Test
+    fun videoAsksForAutoWithTheScreenAndDecodersAndParsesTiersAndCodecs() = runBlocking {
+        val v = api.video("dQw4w9WgXcQ", io.github.dodwmd.ytclassic.player.AUTO_QUALITY, 1440, "avc1,vp9")
+        assertEquals("GET /api/video/dQw4w9WgXcQ?q=auto&maxh=1440&codecs=avc1%2Cvp9", requests.last())
+        assertTrue(v.auto)
+        assertEquals(1440, v.quality)
+        assertEquals(listOf(360, 480, 720, 1080, 1440, 2160), v.qualities)
+        assertEquals(listOf("vp9", "av1"), v.codecs["2160"])
+        // A plain height sends no screen; only heights above 1080p send the decoders.
+        api.video("dQw4w9WgXcQ", 720, 1440, "avc1,vp9")
+        assertEquals("GET /api/video/dQw4w9WgXcQ?q=720", requests.last())
+        api.video("dQw4w9WgXcQ", 2160, 1440, "avc1,vp9")
+        assertEquals("GET /api/video/dQw4w9WgXcQ?q=2160&codecs=avc1%2Cvp9", requests.last())
+        api.video("dQw4w9WgXcQ")
+        assertEquals("GET /api/video/dQw4w9WgXcQ", requests.last())
+    }
+
+    @Test
     fun channelParsesRealResponse() = runBlocking {
         val c = api.channel("UCsBjURrPoezykLs9EqgamOA")
         assertEquals("Fireship", c.channel.title)
@@ -248,6 +266,9 @@ class ApiTest {
     @Test
     fun streamUrlCarriesQualityLanguageAndStart() = runBlocking {
         assertEquals("http://127.0.0.1:8080/stream/abc?q=720", YtApi(server = { "127.0.0.1:8080" }).streamUrl("abc", 720))
+        // The device's decoders go along only for tiers above 1080p.
+        assertEquals("http://127.0.0.1:8080/stream/abc?q=1080", YtApi(server = { "127.0.0.1:8080" }).streamUrl("abc", 1080, codecs = "avc1,vp9"))
+        assertEquals("http://127.0.0.1:8080/stream/abc?q=2160&codecs=avc1%2Cvp9", YtApi(server = { "127.0.0.1:8080" }).streamUrl("abc", 2160, codecs = "avc1,vp9"))
         assertEquals(
             "http://host:8080/stream/abc?q=1080&a=pt&t=90",
             YtApi(server = { "http://host:8080/" }).streamUrl("abc", 1080, startSeconds = 90, lang = "pt"),

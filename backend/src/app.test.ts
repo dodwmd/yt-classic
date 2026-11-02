@@ -49,7 +49,7 @@ before(async () => {
 case "$*" in *zeroresults*) echo '{"entries":[]}'; exit 0;; esac
 case "$*" in *sp=EgIQAg*) echo '{"entries":[{"id":"${tvChan("c")}","channel_id":"${tvChan("c")}","channel":"Chan C","uploader_id":"@chanc","channel_follower_count":1234,"description":"About C","thumbnails":[{"url":"//yt3.ggpht.com/a=s88","width":88},{"url":"//yt3.ggpht.com/a=s176","width":176}]},{"id":"${VID}","title":"a video, not a channel"}]}'; exit 0;; esac
 if [ "$mode" = g ] && [ -n "$FAKE_YTDLP_ERR" ]; then printf '%s\\n' "$FAKE_YTDLP_ERR" >&2; exit 1
-elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; echo https://example.invalid/v; echo https://example.invalid/a
+elif [ "$mode" = g ]; then sleep "\${FAKE_RESOLVE_SLEEP:-0}"; [ -n "$FAKE_YTDLP_FMT" ] && echo "YTFMT $FAKE_YTDLP_FMT"; echo https://example.invalid/v; echo https://example.invalid/a
 else echo '{"entries":[{"id":"${VID}","title":"<script>alert(1)</script>","channel":"Chan","channel_id":"${CHANNEL}","duration":65,"view_count":10}]}'; fi`,
   );
   process.env.FFMPEG_BIN = script("ffmpeg", `echo $$ > "$PIDFILE"; printf xxxx; exec sleep 30`);
@@ -1130,4 +1130,32 @@ test("a flood of searches gets 503s, spends no Data API quota and leaves playbac
   assert.ok(codes.filter((c) => c === 200).length >= 2, codes.join());
   assert.equal(apiSearchCalls, 0, "busy is not a broken yt-dlp: no Data API quota");
   assert.equal(out.find((r) => r.status === 503)!.headers["retry-after"], "5");
+});
+
+test("/api/video offers the tiers the video has (with codec hints), Auto follows maxh and codecs, MAX_QUALITY caps", async () => {
+  process.env.FAKE_YTDLP_FMT = '[{"height":2160,"vcodec":"vp9","protocol":"https"},{"height":1080,"vcodec":"avc1.640028","protocol":"https"},{"height":720,"vcodec":"avc1.4d401f","protocol":"https"}]';
+  try {
+    const hi = JSON.parse((await get("/api/video/QUALITY0001?q=2160")).body);
+    assert.deepEqual(hi.qualities, [720, 1080, 2160]);
+    assert.deepEqual(hi.codecs, { "720": ["avc1"], "1080": ["avc1"], "2160": ["vp9"] });
+    assert.equal(hi.quality, 2160);
+    assert.equal(hi.auto, false);
+    const auto = JSON.parse((await get("/api/video/QUALITY0001?q=auto&maxh=1440&codecs=avc1,vp9")).body);
+    assert.deepEqual([auto.quality, auto.auto], [1440, true]);
+    const h264 = JSON.parse((await get("/api/video/QUALITY0001?q=auto&maxh=2160&codecs=avc1")).body);
+    assert.equal(h264.quality, 1080);
+    process.env.MAX_QUALITY = "1080";
+    const capped = JSON.parse((await get("/api/video/QUALITY0001?q=2160")).body);
+    assert.deepEqual(capped.qualities, [720, 1080]);
+    assert.equal(capped.quality, 720, "a quality above the cap is not honoured");
+    delete process.env.MAX_QUALITY;
+    // A video yt-dlp printed no list for keeps the usual four.
+    delete process.env.FAKE_YTDLP_FMT;
+    const plain = JSON.parse((await get("/api/video/QUALITY0002")).body);
+    assert.deepEqual(plain.qualities, [360, 480, 720, 1080]);
+    assert.deepEqual(plain.codecs, {});
+  } finally {
+    delete process.env.FAKE_YTDLP_FMT;
+    delete process.env.MAX_QUALITY;
+  }
 });

@@ -12,8 +12,14 @@ import { streamEvents } from "../metrics.ts";
 const run = promisify(execFile);
 
 export const VIDEO_ID = /^[\w-]{11}$/;
-export const QUALITIES = [360, 480, 720, 1080] as const;
+export const QUALITIES = [360, 480, 720, 1080, 1440, 2160] as const;
 export const DEFAULT_QUALITY = 720;
+/** Up to this height H.264 + AAC is used when the video has it; above it only VP9/AV1 exist. */
+const AVC_MAX = 1080;
+/** Owner cap (`MAX_QUALITY`, default 2160): the highest quality the server will ever fetch. Read per call so tests can change it. */
+export const maxQuality = (): number => envInt("MAX_QUALITY", 2160);
+/** The qualities the server offers when it does not know the video's formats (all that H.264 can usually deliver), under the cap. */
+export const baseQualities = (): number[] => QUALITIES.filter((h) => h <= Math.min(AVC_MAX, maxQuality()));
 
 const YTDLP = () => process.env.YTDLP_BIN ?? "yt-dlp";
 const FFMPEG = () => process.env.FFMPEG_BIN ?? "ffmpeg";
@@ -29,9 +35,43 @@ export function killChildren(): void {
   for (const c of children) c.kill("SIGKILL");
 }
 
+/** Explicit quality (`?q=1440`): one of QUALITIES within MAX_QUALITY, else the default (itself clamped by the cap). */
 export function parseQuality(q: string | null): number {
   const n = Number(q);
-  return (QUALITIES as readonly number[]).includes(n) ? n : DEFAULT_QUALITY;
+  const cap = maxQuality();
+  const ok = (QUALITIES as readonly number[]).includes(n) && n <= cap;
+  return ok ? n : Math.min(DEFAULT_QUALITY, Math.max(cap, QUALITIES[0]));
+}
+
+export type Codec = "avc1" | "vp9" | "av01";
+const ALL_CODECS: readonly Codec[] = ["avc1", "vp9", "av01"];
+const CODEC_NAMES: Record<string, Codec> = { avc1: "avc1", avc: "avc1", h264: "avc1", vp9: "vp9", vp09: "vp9", av1: "av01", av01: "av01" };
+
+/** Decoders the client says it has (`?codecs=avc1,vp9,av1`). Absent: assume all. Present but nothing known: H.264 only. */
+export function parseCodecs(raw: string | null): readonly Codec[] {
+  if (raw === null || raw === "") return ALL_CODECS;
+  const set = new Set<Codec>();
+  for (const part of raw.slice(0, 64).split(",")) {
+    const c = CODEC_NAMES[part.trim().toLowerCase()];
+    if (c) set.add(c);
+  }
+  return set.size ? ALL_CODECS.filter((c) => set.has(c)) : ["avc1"];
+}
+
+/** Heights above 1080p need VP9 or AV1; Auto never goes there for a client that has neither. */
+const hiCodecs = (codecs: readonly Codec[]) => codecs.filter((c): c is "vp9" | "av01" => c !== "avc1");
+
+/**
+ * `?q=auto`: the highest tier the display (`maxh`, px of the shorter screen side) can use, at most 1080p unless the client
+ * decodes VP9 or AV1, and never above MAX_QUALITY. When the video's offered tiers are known, the highest of those under that cap.
+ */
+export function autoQuality(maxh: string | null, codecs: readonly Codec[], offered?: readonly number[]): number {
+  const h = Number(maxh);
+  const screen = maxh !== null && maxh !== "" && Number.isFinite(h) && h > 0 ? h : AVC_MAX;
+  let cap = Math.min(screen, maxQuality(), hiCodecs(codecs).length ? 2160 : AVC_MAX);
+  cap = Math.max(...QUALITIES.filter((t) => t <= cap), QUALITIES[0]);
+  const fits = offered?.filter((t) => t <= cap);
+  return fits?.length ? Math.max(...fits) : cap;
 }
 
 /** Start offset in whole seconds (`?t=90`), 0 if absent or invalid. */
@@ -48,12 +88,72 @@ export function parseLang(a: string | null): string {
   return a && AUDIO_LANG.test(a) ? a : DEFAULT_LANG;
 }
 
+/** What a request asks for: `q` (a tier or "auto"), `maxh` (Auto only) and `codecs`. `quality` is always a concrete tier. */
+export function requestedQuality(p: URLSearchParams): { quality: number; auto: boolean; codecs: readonly Codec[] } {
+  const codecs = parseCodecs(p.get("codecs"));
+  const auto = p.get("q") === "auto";
+  return { quality: auto ? autoQuality(p.get("maxh"), codecs) : parseQuality(p.get("q")), auto, codecs };
+}
+
 // Many videos carry several audio tracks (original + auto-dubs) at the same bitrate; without a language
 // filter yt-dlp can pick any of them. Try the preferred language first, then anything.
-export const formatSelector = (q: number, lang: string) => {
-  const pref = (audio: string) => `bv*[height<=${q}][vcodec^=avc1]+${audio}/bv*[height<=${q}][ext=mp4]+${audio}`;
-  return `${pref(`ba[ext=m4a][language^=${lang}]`)}/${pref("ba[ext=m4a]")}/b[height<=${q}][ext=mp4]/bv*[height<=${q}]+ba/b[height<=${q}]`;
+const FORMATS_TAG = "YTFMT ";
+// Above 1080p the video is VP9/AV1 (tried first, VP9 before the heavier AV1) and the audio is still AAC when there is any;
+// webm Opus audio also remuxes into fragmented mp4 with `-c copy`. The H.264 chain below is the fallback (and the whole story up to 1080p).
+// yt-dlp reports DASH VP9 as "vp9" and HLS/other VP9 as "vp09.00...": the regex takes both.
+const VCODEC_RE: Record<"vp9" | "av01", string> = { vp9: "'^vp0?9'", av01: "'^av01'" };
+export const formatSelector = (q: number, lang: string, codecs: readonly Codec[] = ALL_CODECS) => {
+  const hi = hiCodecs(codecs);
+  if (q > AVC_MAX && !hi.length) q = AVC_MAX; // nothing above 1080p is decodable: don't ask for it
+  // Codecs the client lacks must not sneak in through the generic fallbacks either.
+  const skip = q > AVC_MAX ? (["vp9", "av01"] as const).filter((c) => !hi.includes(c)).map((c) => `[vcodec!~=${VCODEC_RE[c]}]`).join("") : "";
+  const pref = (audio: string) => `bv*[height<=${q}][vcodec^=avc1]+${audio}/bv*[height<=${q}][ext=mp4]${skip}+${audio}`;
+  const high = q > AVC_MAX
+    ? hi.map((c) => {
+        const v = `bv*[height<=${q}][height>${AVC_MAX}][vcodec~=${VCODEC_RE[c]}][protocol!*=m3u8]`;
+        return `${v}+ba[ext=m4a][language^=${lang}]/${v}+ba[ext=m4a]/${v}+ba`;
+      })
+    : [];
+  return [...high, pref(`ba[ext=m4a][language^=${lang}]`), pref("ba[ext=m4a]"), `b[height<=${q}][ext=mp4]${skip}`, `bv*[height<=${q}]${skip}+ba`, `b[height<=${q}]${skip}`].join("/");
 };
+
+/** One entry per tier the video really has: its height in (previous tier, tier], with the codec families found there. */
+export type Offered = { qualities: number[]; codecs: Record<string, string[]> };
+type Fmt = { height?: unknown; vcodec?: unknown; protocol?: unknown };
+const family = (vcodec: string): Codec | null =>
+  vcodec.startsWith("avc1") ? "avc1" : vcodec.startsWith("vp09") || vcodec === "vp9" ? "vp9" : vcodec.startsWith("av01") ? "av01" : null;
+
+export function offeredFrom(formats: readonly Fmt[]): Offered {
+  const cap = maxQuality();
+  const found = new Map<number, Set<Codec>>();
+  for (const f of formats) {
+    if (typeof f.height !== "number" || f.height <= 0 || typeof f.vcodec !== "string") continue;
+    if (typeof f.protocol === "string" && f.protocol.includes("m3u8")) continue; // the stream route can only remux plain HTTPS files
+    const fam = family(f.vcodec);
+    const tier = QUALITIES.find((t) => f.height as number <= t);
+    if (!fam || tier === undefined || tier > cap) continue;
+    (found.get(tier) ?? found.set(tier, new Set()).get(tier)!).add(fam);
+  }
+  const qualities = [...found.keys()].sort((a, b) => a - b);
+  return { qualities, codecs: Object.fromEntries(qualities.map((t) => [String(t), ALL_CODECS.filter((c) => found.get(t)!.has(c)).map((c) => (c === "av01" ? "av1" : c))])) };
+}
+
+// What the last resolve of a video learned about its formats (kept a while longer than the signed URLs).
+const offers = new Map<string, { until: number; offered: Offered }>();
+const OFFER_TTL_MS = 30 * 60_000;
+/** The tiers a video has, once any resolve of it has succeeded; undefined when unknown (never resolved, or yt-dlp printed none). */
+export function knownOffered(id: string): Offered | undefined {
+  const hit = offers.get(id);
+  if (hit && hit.until <= Date.now()) offers.delete(id);
+  return hit && hit.until > Date.now() ? hit.offered : undefined;
+}
+function noteOffered(id: string, formats: readonly Fmt[]): void {
+  const offered = offeredFrom(formats);
+  if (!offered.qualities.length) return;
+  offers.delete(id);
+  offers.set(id, { until: Date.now() + OFFER_TTL_MS, offered });
+  if (offers.size > 200) offers.delete(offers.keys().next().value!);
+}
 
 // Videos whose last resolve failed for a reason retrying won't fix; lets /api/video answer "can't play" without yt-dlp.
 const unplayable = new Map<string, { code: ErrorCode; until: number }>();
@@ -86,19 +186,29 @@ export function recordFailure(key: string, err: unknown, now = Date.now()): void
 export const clearFailures = () => failures.clear();
 
 /** Direct googlevideo URLs: [video, audio] or a single muxed URL. Bound to this host's IP. */
-export async function resolveUrls(id: string, q: number, lang: string): Promise<string[]> {
+export async function resolveUrls(id: string, q: number, lang: string, codecs: readonly Codec[] = ALL_CODECS): Promise<string[]> {
   if (!VIDEO_ID.test(id)) throw new Error("bad video id");
-  const key = `${id}-${q}-${lang}`;
+  // The codec set only changes the selector above 1080p.
+  const key = `${id}-${q}-${lang}${q > AVC_MAX ? `-${hiCodecs(codecs).join("+")}` : ""}`;
   const failed = recentFailure(key);
   if (failed) return Promise.reject(failed.err);
   return cached(`dlp:${key}`, 5 * 60_000, () =>
     resolveSlots.run(() => tracked(async () => {
       const { stdout } = await run(
         YTDLP(),
-        ["--no-playlist", "--no-warnings", "-f", formatSelector(q, lang), "-g", "--", `https://www.youtube.com/watch?v=${id}`],
-        { timeout: 60_000 },
+        // The same extraction also prints the format list (one tagged JSON line), so the tiers a video has cost no extra run.
+        ["--no-playlist", "--no-warnings", "-f", formatSelector(q, lang, codecs), "-g", "--print", `${FORMATS_TAG}%(formats.:.{height,vcodec,protocol})j`, "--", `https://www.youtube.com/watch?v=${id}`],
+        { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
       );
-      const urls = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+      const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+      const tagged = lines.find((l) => l.startsWith(FORMATS_TAG));
+      const urls = lines.filter((l) => !l.startsWith(FORMATS_TAG));
+      if (tagged) {
+        try {
+          const list = JSON.parse(tagged.slice(FORMATS_TAG.length)) as unknown;
+          if (Array.isArray(list)) noteOffered(id, list);
+        } catch { /* an unreadable list only means the default qualities are offered */ }
+      }
       if (!urls.length) throw new Error("yt-dlp returned no stream URL");
       return urls;
     }).catch((e) => {
@@ -122,7 +232,7 @@ export function ffmpegArgs(urls: string[], start: number): string[] {
 }
 
 /** Remux the upstream streams to fragmented mp4 on the fly. No file on disk, no waiting for a download. */
-export async function streamLive(id: string, q: number, lang: string, start: number, req: IncomingMessage, res: ServerResponse): Promise<void> {
+export async function streamLive(id: string, q: number, lang: string, codecs: readonly Codec[], start: number, req: IncomingMessage, res: ServerResponse): Promise<void> {
   // Registered before any await: if the viewer leaves while yt-dlp is still resolving, we must notice.
   let gone = res.destroyed;
   let ff: ChildProcess | undefined;
@@ -133,7 +243,7 @@ export async function streamLive(id: string, q: number, lang: string, start: num
 
   let urls: string[];
   try {
-    urls = await resolveUrls(id, q, lang);
+    urls = await resolveUrls(id, q, lang, codecs);
   } catch (e) {
     if (!gone) streamEvents.failed(); // the caller turns it into a classified JSON error (nothing was sent yet)
     throw e;

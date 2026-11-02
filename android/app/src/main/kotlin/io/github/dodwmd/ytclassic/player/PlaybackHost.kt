@@ -83,6 +83,11 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         private set
     var quality by mutableIntStateOf(0)
         private set
+    /** The user is on Auto: [quality] is the tier Auto picked for this video. */
+    var auto by mutableStateOf(false)
+        private set
+    /** This device's hardware decoders; read once, on first use (the query is not free). */
+    val decoders: Decoders by lazy { deviceDecoders() }
     /** Playback speed (media time per real time); the persisted default, applied to every video. Pitch stays corrected (ExoPlayer's default). */
     var speed by mutableFloatStateOf(1f)
         private set
@@ -263,21 +268,21 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
     }
 
     /** Starts [v] at [startSeconds], unless it is already the current video (the screen came back, or was recreated). */
-    fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long) {
+    fun open(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, initialAuto: Boolean = false) {
         if (video?.id == v.id) return
         endTv() // the user chose a video themselves: nothing may take over when it ends
-        begin(v, initialQuality, audioLang, startSeconds)
+        begin(v, initialQuality, audioLang, startSeconds, auto = initialAuto)
         screenAttached = true
     }
 
     /** [handOver]: TV moving on to the next video; the old stream is not paused first, so the session never looks paused. */
-    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, handOver: Boolean = false) {
+    private fun begin(v: VideoDetail, initialQuality: Int, audioLang: String, startSeconds: Long, handOver: Boolean = false, auto: Boolean = this.auto) {
         if (video != null) reportProgress() // switching videos: save where the previous one stopped
         lastReported = -1L
         video = v
         lang = audioLang
         seek = StreamSeek(v.durationSeconds ?: 0L, startSeconds)
-        load(startSeconds, initialQuality, play = true, silence = !handOver)
+        load(startSeconds, initialQuality, play = true, silence = !handOver, auto = auto)
     }
 
     /**
@@ -427,6 +432,13 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         }
     }
 
+    /** The user picked a quality chip ([auto]: the Auto chip, whose tier is [q]): restarts here at that tier and keeps it as the default for new videos. */
+    fun chooseQuality(q: Int, auto: Boolean) {
+        if (q == quality && auto == this.auto) return
+        load(positionSeconds(), q, auto = auto)
+        scope.launch { settings.setQualityPref(if (auto) AUTO_QUALITY else q) } // app scope: outlives the watch screen
+    }
+
     /** Absolute position in whole seconds. */
     fun positionSeconds(): Long = if (finished) seek.totalSeconds else seek.positionMs(exo.currentPosition) / 1000
 
@@ -435,11 +447,12 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
      * stream is silenced at once, the base offset only moves when the new stream is handed to the player, and only
      * the newest request may reach the player: a quick second seek must not be overtaken by the first.
      */
-    fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true) {
+    fun load(at: Long, q: Int = quality, play: Boolean? = null, silence: Boolean = true, auto: Boolean = this.auto) {
         val v = video ?: return
         pendingPlay = play ?: playIntent
         intentVersion++
         quality = q
+        this.auto = auto
         error = null
         errorCode = null
         needsToken = false
@@ -451,7 +464,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi, private
         loading?.cancel()
         loading = scope.launch {
             try {
-                val url = api.streamUrl(v.id, q, start, lang)
+                val url = api.streamUrl(v.id, q, start, lang, decoders.codecsParam)
                 streamOrigin = origin(url)
                 streamAuth = api.streamAuthorization()
                 loadSpeed()

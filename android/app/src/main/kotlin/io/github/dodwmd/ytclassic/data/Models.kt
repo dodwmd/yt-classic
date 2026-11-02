@@ -192,7 +192,11 @@ data class VideoResponse(
     val video: VideoDetail,
     val related: RelatedList = RelatedList(),
     val quality: Int = 720,
+    /** True when the request was `q=auto`: [quality] is then what Auto chose for the sent screen height and codecs. */
+    val auto: Boolean = false,
     val qualities: List<Int> = listOf(360, 480, 720, 1080),
+    /** Per tier (as a string key), the codec families the video has there: "avc1", "vp9", "av1". Empty when unknown. */
+    val codecs: Map<String, List<String>> = emptyMap(),
     val lang: String = "",
     val progress: Progress? = null,
     /** False only when the server already knows the video can't be played; [reason] is the error code, [message] the explanation. */

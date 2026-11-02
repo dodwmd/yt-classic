@@ -47,6 +47,11 @@ import io.github.dodwmd.ytclassic.data.joinParts
 import io.github.dodwmd.ytclassic.data.timeAgo
 import io.github.dodwmd.ytclassic.player.LocalPip
 import io.github.dodwmd.ytclassic.player.StreamPlayer
+import io.github.dodwmd.ytclassic.player.qualityPlan
+import io.github.dodwmd.ytclassic.player.screenShortSide
+import androidx.compose.ui.platform.LocalContext
+import io.github.dodwmd.ytclassic.App
+import kotlinx.coroutines.flow.first
 import io.github.dodwmd.ytclassic.player.resumeStart
 
 @Composable
@@ -59,8 +64,17 @@ fun WatchScreen(
     // Survives leaving the screen and coming back (or the process being killed), so a detour doesn't lose your place.
     // A LongArray rather than state: it's written every few seconds and nothing should recompose for it.
     val resume = rememberSaveable(id) { longArrayOf(startSeconds) }
-    val loaded = rememberLoad(id) { api.video(id) }
-    LoadedContent(loaded) { r ->
+    val app = LocalContext.current.applicationContext as App
+    // The stored quality (or Auto) goes with the request so the server can answer for this screen and these decoders; the
+    // chips and the starting tier come from the answer plus what this device can decode.
+    val loaded = rememberLoad(id) {
+        val pref = app.settings.qualityPref.first()
+        val decoders = app.host.decoders
+        val screen = screenShortSide(app)
+        val response = api.video(id, pref, screen, decoders.codecsParam)
+        response to qualityPlan(response, pref, decoders, screen)
+    }
+    LoadedContent(loaded) { (r, plan) ->
         val v = r.video
         var expanded by remember(v.id) { mutableStateOf(false) }
         // Comments cost nothing until opened; the open state and the sort order survive rotation, the loaded pages live in the model.
@@ -82,6 +96,7 @@ fun WatchScreen(
         // PiP): recreating StreamPlayer would stop and restart playback, and the list would lose its scroll.
         // The movable lambdas outlive recompositions, so they read the latest values through these.
         val latest by rememberUpdatedState(r)
+        val planNow by rememberUpdatedState(plan)
         val fullscreenNow by rememberUpdatedState(fullscreen)
         val onFullscreenNow by rememberUpdatedState(onFullscreen)
         val onVideoNow by rememberUpdatedState(onVideo)
@@ -94,7 +109,10 @@ fun WatchScreen(
                 // Computed when the player is mounted: if it is ever recreated it resumes from where it was, not from the first start.
                 val begin = remember { resumeStart(resume[0], cur.progress, cur.video.durationSeconds ?: 0L) }
                 if (showPlayer(cur.playable, cur.reason, override)) {
-                    StreamPlayer(cur.video, cur.quality, cur.qualities, cur.lang, begin, onPosition = { resume[0] = it }, fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) })
+                    StreamPlayer(
+                        cur.video, planNow.quality, planNow.chips, cur.lang, begin, onPosition = { resume[0] = it },
+                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto,
+                    )
                 } else {
                     Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                         Text(shortMessage(cur.message.ifBlank { "This video can't be played." }), color = MaterialTheme.colorScheme.error)

@@ -20,6 +20,7 @@ import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.selected
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.WindowInsets
@@ -102,6 +103,7 @@ fun StreamPlayer(
     /** TV: adds Skip and Stop buttons to the controls (used in fullscreen, where the buttons below the player are not visible). */
     onSkip: (() -> Unit)? = null,
     onStop: (() -> Unit)? = null,
+    initialAuto: Boolean = false,
 ) {
     val app = LocalContext.current.applicationContext as App
     val host = app.host
@@ -123,7 +125,7 @@ fun StreamPlayer(
 
     DisposableEffect(pip) { onDispose { pip.clearVideoBounds() } }
     DisposableEffect(video.id) {
-        host.open(video, initialQuality, lang, startSeconds)
+        host.open(video, initialQuality, lang, startSeconds, initialAuto)
         onDispose {
             savePosition()
             host.leave(video.id) // stops, unless it is playing on in the background
@@ -301,9 +303,20 @@ fun StreamPlayer(
                 videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f).then(if (pip.inPip) Modifier else gestures), overlay, taps)
             }
             transport()
-            Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Scrolls sideways when the tiers (up to 2160p, and Auto) do not fit a narrow screen.
+            Row(
+                Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 for (q in qualities) {
-                    FilterChip(selected = q == quality, onClick = { if (q != quality) host.load(host.positionSeconds(), q) }, label = { Text("${q}p") })
+                    FilterChip(selected = !host.auto && q == quality, onClick = { host.chooseQuality(q, false) }, label = { Text("${q}p") })
+                }
+                if (qualities.size > 1) {
+                    val screen = screenShortSide(LocalContext.current)
+                    FilterChip(
+                        selected = host.auto, onClick = { host.chooseQuality(autoTier(qualities, screen), true) },
+                        label = { Text(if (host.auto) "Auto ${quality}p" else "Auto") },
+                    )
                 }
             }
         }
