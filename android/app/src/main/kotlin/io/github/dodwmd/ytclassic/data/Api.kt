@@ -165,6 +165,20 @@ class YtApi(
     suspend fun commentReplies(commentId: String, pageToken: String? = null): CommentPage =
         get("api/comments/$commentId/replies", "pageToken" to pageToken)
 
+    /** The subtitle tracks of a video (possibly none). */
+    suspend fun subTracks(videoId: String, pref: String = ""): List<SubTrack> =
+        get<SubTracks>("api/video/$videoId/subs", "pref" to pref.ifEmpty { null }).tracks
+
+    /** One track as WebVTT text. Throws an [ApiException] with code "no-subtitles" when the video has none in [lang]. */
+    suspend fun subVtt(videoId: String, lang: String): String = withContext(Dispatchers.IO) {
+        execute(request(url("api/video/$videoId/subs/${java.net.URLEncoder.encode(lang, "UTF-8")}.vtt")).build()).use {
+            val text = it.body.string()
+            if (it.code == 401) throw AuthException(token().isNotBlank())
+            if (!it.isSuccessful) throw apiErrorFrom(it.code, text)
+            text
+        }
+    }
+
     suspend fun status(): StatusResponse = get("api/status")
 
     /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */

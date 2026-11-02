@@ -54,6 +54,53 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   separate from the channel tab budget; beyond either they answer 429 `rate-limited` with `Retry-After`. A video with
   comments turned off answers `403` with code `comments-disabled`, remembered for an hour for both orders and every page (also across restarts), so asking again costs no units and no hourly request slot; page tokens
   must match `[A-Za-z0-9_-]{1,120}`, video ids 11 characters, comment ids `[A-Za-z0-9_-]{16,80}`.
+- **Subtitles and captions** (both clients; off by default). A **CC** button sits in the player controls. The track list costs the server a
+  yt-dlp run, so it is only asked for when captions are first turned on (or were left on), or, on Android, when the CC menu is first
+  opened; a video without tracks says "No subtitles for this video". A language menu (web: a select next to the button, Android: the
+  menu on the button) and the on/off state are remembered (web: localStorage, Android: DataStore). Android starts on the saved language,
+  else the device language (the same primary subtag matches, so `en` finds `en-GB` or `en-orig`), else the first manual track. Web: `c`
+  toggles. The stream is a remux restarted at `?t=` on every seek, so the clients do not use `<track>` or ExoPlayer's text renderer:
+  they parse the WebVTT themselves (web: lazily loaded `subs.js`; Android: `data/Subtitles.kt`) and show the cue for the absolute time
+  (stream offset + player time) as plain text over the video, in fullscreen too (not in Android picture-in-picture). Automatic captions
+  drop the lines their rolling cues repeat. On Android rows narrower than 420 dp (more at larger font sizes) the seek bar gets its own
+  row and speed, CC, picture-in-picture and TV Skip/Stop move into a "More controls" menu.
+  `GET /api/video/:id/subs[?pref=<lang>]` lists `{tracks: [{lang, name, auto}]}`: manual tracks first, then automatic ones (`pref`
+  first, then originals such as `en-orig`, then languages that also have a manual track, then the rest sorted), one track per language,
+  at most 30 (`pref`, when the video has it, is never cut); language codes must match `^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$`, so
+  keys such as `live_chat` or `a.en` are skipped. `GET /api/video/:id/subs/:lang.vtt` returns `text/vtt`. Both come from one yt-dlp
+  metadata call per video (its own single slot, separate from playback and search; a hung run is killed after 30 s and a failure is
+  remembered for 30 s so reloads cannot re-run it), cached for an hour (no tracks: 10 minutes; only the track list is kept in the
+  database, never the VTT or the subtitle URLs). The VTT is fetched from the URL yt-dlp gave, only over https from `youtube.com` /
+  `googlevideo.com`, without redirects, with a 10 s timeout (body included) and a 2 MB cap; a 403/410 refreshes the URLs once; bodies
+  are kept in memory (8 MB in total) and concurrent requests share one download. A language the video lacks, an oversized download
+  or a body that is not WebVTT answers `404` `no-subtitles`.
+- **Comments** (read-only; web: a collapsed "Show comments (N)" section on the watch page, Android: a "Show comments" row on
+  the Watch screen). Nothing is requested, and on the web no comment code is downloaded, until it is opened. Top/Newest,
+  "Load more" (20 a page) and per-comment "Show N replies" (loaded on demand). Comments are shown as plain text (the API is asked for
+  `textFormat=plainText`, so nothing is stripped or decoded; control and invisible characters such as bidi overrides,
+  zero-width spaces and BOMs are removed) and links in the text are not clickable. Avatars are only passed on from
+  `yt3.ggpht.com`, `yt3.googleusercontent.com` and `*.ytimg.com`. The web page shows at most 200 comments (or replies) per list. Replying, liking and posting are not
+  available. `GET /api/video/:id/comments?order=top|new&pageToken=` and `GET /api/comments/:commentId/replies?pageToken=`
+  return `{items: [{id, author, authorChannelId?, authorThumb? (https only), text, likeCount, publishedAt, updatedAt?,
+  replyCount}], nextPageToken?}` (text at most 5000 and author at most 100 UTF-16 units; items with malformed ids are dropped;
+  the total shown on the button is the video's `commentCount`). Each page costs 1 Data API unit (`commentThreads.list` and
+  `comments.list`) and is cached for 10 minutes, first pages also in the database. Comments share a Data API budget
+  (`COMMENT_UNITS_MAX`, default 300 units a day) and an hourly request cap (`COMMENT_REQUESTS_PER_HOUR`, default 600),
+  separate from the channel tab budget; beyond either they answer 429 `rate-limited` with `Retry-After`. A video with
+  comments turned off answers `403` with code `comments-disabled`, remembered for an hour for both orders and every page (also across restarts), so asking again costs no units and no hourly request slot; page tokens
+  must match `[A-Za-z0-9_-]{1,120}`, video ids 11 characters, comment ids `[A-Za-z0-9_-]{16,80}`.
+- **Subtitles and captions** (both clients; off by default). A **CC** button in the player controls appears only when the video has
+  tracks; a language menu (web: a select next to the button, Android: a menu on the button) and the on/off state are remembered
+  (web: localStorage, Android: DataStore). Web: `c` toggles. The stream is a remux restarted at `?t=` on every seek, so the clients
+  do not use `<track>` or ExoPlayer's text renderer: they parse the WebVTT themselves (web: lazily loaded `subs.js`; Android:
+  `data/Subtitles.kt`) and show the cue for the absolute time (stream offset + player time) as plain text over the video, in
+  fullscreen too (not in Android picture-in-picture). Automatic captions drop the lines their rolling cues repeat.
+  `GET /api/video/:id/subs` lists `{tracks: [{lang, name, auto}]}` (manual tracks first, then automatic ones, at most 30, one per
+  language; language codes must match `^[A-Za-z]{2,3}([-_][A-Za-z0-9]{2,8})*$`) and `GET /api/video/:id/subs/:lang.vtt` returns
+  `text/vtt`. Both come from one yt-dlp metadata call per video (its own single slot, separate from playback and search), cached
+  for an hour (no tracks: 10 minutes; only the track list is kept in the database, never the VTT or the subtitle URLs). The VTT
+  is fetched from the URL yt-dlp gave, only over https from `youtube.com` / `googlevideo.com`, without redirects, with a
+  10 s timeout and a 2 MB cap; anything that is not WebVTT is refused. A language the video lacks answers `404` `no-subtitles`.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
@@ -280,6 +327,7 @@ Streams answer with this JSON when they fail before the first byte; a mid-stream
 | `live` | 409 | no | live stream (not playable here) |
 | `upcoming` | 409 | no | live event or premiere not started |
 | `stale-page` | 400 | yes | the Data API rejected a page token (`invalidPageToken`): start the list again |
+| `no-subtitles` | 404 | no | the video has no subtitles in that language (subtitle routes only) |
 | `comments-disabled` | 403 | no | the video's comments are turned off (comment routes only; the video still plays, so it is not skippable) |
 | `bot-check` | 502 | yes | YouTube asks the server to prove it is not a bot |
 | `rate-limited` | 429 | yes | HTTP 429 or Data API quota (`quotaExceeded`, `rateLimitExceeded`, ...); `Retry-After: 60` |

@@ -1,0 +1,22 @@
+WEBVTT
+Kind: captions
+Language: en
+
+STYLE
+::cue { color: lime }
+
+NOTE this is a comment
+
+1
+00:00:01.000 --> 00:00:03.500 align:start position:0%
+<v Bob>Hello &amp; welcome</v>
+
+00:03.500 --> 00:05.000
+line one
+line two
+line three
+
+00:05.000 --> 00:06.000
+
+01:00:00.250 --> 01:00:02.000
+<i>An hour in</i>

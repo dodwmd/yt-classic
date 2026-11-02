@@ -38,7 +38,7 @@ const FIXTURES: Array<[ErrorCode, string]> = [
 // comments-disabled comes only from the Data API (classifyUpstream), never from yt-dlp text.
 test("every real yt-dlp message maps to its code", () => {
   for (const [code, text] of FIXTURES) assert.equal(classifyText(text), code, text);
-  for (const code of CODES) if (code !== "busy" && code !== "unknown" && code !== "comments-disabled" && code !== "stale-page") assert.ok(FIXTURES.some(([c]) => c === code), `a fixture for ${code}`);
+  for (const code of CODES) if (code !== "busy" && code !== "unknown" && code !== "comments-disabled" && code !== "stale-page" && code !== "no-subtitles") assert.ok(FIXTURES.some(([c]) => c === code), `a fixture for ${code}`);
 });
 
 test("ambiguous messages resolve to the more specific code", () => {
@@ -111,7 +111,7 @@ test("Data API failures: quota reasons, 429, not-found, the rest", () => {
 test("the table: every code has a status, a safe message and a boolean retryable", () => {
   const statuses: Record<ErrorCode, number> = {
     "age-restricted": 403, "region-blocked": 403, "members-only": 403, "comments-disabled": 403, "stale-page": 400, private: 404, removed: 404,
-    "rate-limited": 429, busy: 503, "bot-check": 502, network: 502, unknown: 502, live: 409, upcoming: 409,
+    "rate-limited": 429, busy: 503, "bot-check": 502, network: 502, unknown: 502, live: 409, upcoming: 409, "no-subtitles": 404,
   };
   assert.deepEqual(Object.keys(INFO).sort(), [...CODES].sort());
   for (const code of CODES) {

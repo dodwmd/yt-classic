@@ -16,6 +16,7 @@ export const CODES = [
   "rate-limited",
   "network",
   "busy",
+  "no-subtitles",
   "unknown",
 ] as const;
 export type ErrorCode = (typeof CODES)[number];
@@ -41,6 +42,7 @@ export const INFO: Record<ErrorCode, Info> = {
   "rate-limited": { status: 429, message: "YouTube is limiting requests right now. Try again in a while.", retryable: true },
   network: { status: 502, message: "Couldn't reach YouTube. Check the server's connection and try again.", retryable: true },
   busy: { status: 503, message: "The server is busy. Try again in a few seconds.", retryable: true },
+  "no-subtitles": { status: 404, message: "This video has no subtitles in that language.", retryable: false },
   unknown: { status: 502, message: "Something went wrong talking to YouTube. Check the backend log.", retryable: true },
 };
 
@@ -80,6 +82,13 @@ export function classifyText(text: string): ErrorCode | null {
   return null;
 }
 
+/** Thrown when a video has no usable subtitle track in the requested language (also an oversized or non-WebVTT download: retrying won't help). */
+export class NoSubtitles extends Error {
+  constructor(why = "no subtitles") {
+    super(why);
+  }
+}
+
 /** A failed Data API call: the HTTP status and first error `reason` only, never the URL (it contains the key). */
 export class UpstreamError extends Error {
   status: number;
@@ -116,6 +125,7 @@ export function errorText(err: unknown): string {
 /** The one classification source: any thrown value to a code. */
 export function classifyError(err: unknown): ErrorCode {
   if (err instanceof BusyError) return "busy";
+  if (err instanceof NoSubtitles) return "no-subtitles";
   if (err instanceof QuotaError) return "rate-limited"; // our own daily budgets for channel tabs and comments
   if (err instanceof UpstreamError) return classifyUpstream(err.status, err.reason);
   const e = err as { code?: unknown; killed?: boolean; name?: string; message?: string; stderr?: string; cause?: { code?: unknown } } | null;
