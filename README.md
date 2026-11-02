@@ -267,6 +267,11 @@ use `isSkippable(code)` (Android `data/Errors.kt`) to move to the next video. `G
 private) or a recent yt-dlp failure already says the video cannot be played; the web watch page then shows the reason
 instead of a dead player, and a player error on the web page fetches the stream's JSON error to show the real cause.
 
+Two quotas, one story: `src/quota.ts` only *counts* Data API units actually spent today (every request, persisted, shown in
+metrics and `/api/status`), while `src/tabquota.ts` is the *budget* for the channel tab routes (`TAB_UNITS_MAX`,
+`TAB_REQUESTS_PER_HOUR`). When that budget is used up the tab routes answer a classified `rate-limited` 429 with the
+budget's own message and a `Retry-After` until the reset, exactly like a Data API `quotaExceeded`.
+
 ### Metrics
 
 `GET /api/metrics` returns Prometheus text format (counters reset on restart; labels come from closed lists, so the

@@ -1,4 +1,5 @@
 import { BusyError } from "./limit.ts";
+import { QuotaError } from "./tabquota.ts";
 
 /** The closed set of failure kinds a client can see. Codes are stable: clients switch on them. */
 export const CODES = [
@@ -107,6 +108,7 @@ export function errorText(err: unknown): string {
 /** The one classification source: any thrown value to a code. */
 export function classifyError(err: unknown): ErrorCode {
   if (err instanceof BusyError) return "busy";
+  if (err instanceof QuotaError) return "rate-limited"; // our own daily budget for channel tabs
   if (err instanceof UpstreamError) return classifyUpstream(err.status, err.reason);
   const e = err as { code?: unknown; killed?: boolean; name?: string; message?: string; stderr?: string; cause?: { code?: unknown } } | null;
   if (e?.code === "ENOENT") return "unknown"; // the tool is missing: an operator problem, not a network one

@@ -21,6 +21,7 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
+import io.github.dodwmd.ytclassic.data.errorActions
 import io.github.dodwmd.ytclassic.data.SearchPage
 import io.github.dodwmd.ytclassic.data.webLinks
 import androidx.compose.foundation.lazy.items
@@ -172,7 +173,9 @@ private fun <T> LazyListScope.pagedRows(list: PagedList<T>, prefix: String, empt
                     val openSettings = LocalOpenSettings.current
                     Button(onClick = openSettings) { Text("Open Settings") }
                 }
-                OutlinedButton(onClick = { list.load() }, enabled = !s.loading) { Text("Retry") }
+                val actions = errorActions(s.code, s.retryable)
+                actions.hint?.let { Text(it, color = Muted) }
+                if (actions.showRetry) OutlinedButton(onClick = { list.load() }, enabled = !s.loading) { Text("Retry") }
             }
             if (s.canLoadMore && s.error == null) OutlinedButton(onClick = { list.load() }) { Text("Load more") }
             // Only the end of the list is "nothing": a scan that found no match so far still has a next page to try.

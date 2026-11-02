@@ -349,6 +349,8 @@ test("quota refusals carry Retry-After, and the hourly request cap answers 429 t
     request({ host: "127.0.0.1", port, path: `/api/channel/${CH}/about` }, (res) => { res.resume(); resolve(res.headers); }).end();
   });
   assert.ok(Number(raw["retry-after"]) >= 1);
+  const spent = await get(`/api/channel/${CH}/about`);
+  assert.deepEqual([spent.status, spent.json.code, spent.json.retryable], [429, "rate-limited", true]);
   delete process.env.TAB_UNITS_MAX;
   resetTabQuota();
   process.env.TAB_REQUESTS_PER_HOUR = "3";
@@ -358,6 +360,10 @@ test("quota refusals carry Retry-After, and the hourly request cap answers 429 t
   });
   assert.equal(r.status, 429);
   assert.ok(Number(r.wait) >= 1 && Number(r.wait) <= 3600);
+  const again = await get(`/api/channel/${CH}/playlists`); // the same budget errors use the classified JSON
+  assert.equal(again.json.code, "rate-limited");
+  assert.equal(again.json.retryable, true);
+  assert.match(again.json.error, /channel tab requests/);
 });
 
 test("unknown playlist and channel ids are remembered for longer than the usual negative cache", async () => {

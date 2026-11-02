@@ -1,6 +1,7 @@
 package io.github.dodwmd.ytclassic
 
 import com.sun.net.httpserver.HttpServer
+import io.github.dodwmd.ytclassic.data.errorActions
 import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.AuthException
 import io.github.dodwmd.ytclassic.data.Chunk
@@ -207,6 +208,16 @@ class ChannelTabsTest {
         assertFalse(s.needsToken)
         assertEquals(listOf("kaboom"), seen.map { it.message })
         assertFalse(s.error!!.contains("kaboom"), "the details are not shown to the user")
+    }
+
+    @Test
+    fun aClassifiedFailureKeepsItsCodeSoTheFooterCanSkipTheRetryButton() = runBlocking {
+        val s = PageState<String>().begin().advance({ it }, fetch = { throw ApiException("This video is private.", code = "private", retryable = false) })
+        assertEquals("private", s.code)
+        assertFalse(errorActions(s.code, s.retryable).showRetry)
+        val limited = PageState<String>().begin().advance({ it }, fetch = { throw ApiException("slow down", code = "rate-limited", retryable = true) })
+        assertTrue(errorActions(limited.code, limited.retryable).showRetry)
+        assertNull(limited.begin().code, "a new attempt clears the old code")
     }
 
     @Test

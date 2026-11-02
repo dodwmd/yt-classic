@@ -68,9 +68,9 @@ function hostAllowed(req: IncomingMessage): boolean {
 }
 
 /** A classified failure: the status comes from the code, the body is {error, code, retryable}. */
-function classified(res: ServerResponse, code: ErrorCode, message?: string): void {
+function classified(res: ServerResponse, code: ErrorCode, message?: string, retryAfter?: number): void {
   countError(code);
-  const retry = code === "busy" ? "5" : code === "rate-limited" ? "60" : "";
+  const retry = retryAfter ? String(retryAfter) : code === "busy" ? "5" : code === "rate-limited" ? "60" : "";
   json(res, INFO[code].status, errorBody(code, message), retry ? { "retry-after": retry } : {});
 }
 
@@ -477,7 +477,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     try {
       if (tab !== undefined) {
         const wait = tabRequestWait();
-        if (wait) return json(res, 429, { error: "Too many channel tab requests this hour. Try again later." }, { "retry-after": String(wait) });
+        if (wait) return classified(res, "rate-limited", "Too many channel tab requests this hour. Try again later.", wait);
         const c = (await tabChannel(id)).channel; // an unknown channel is a clean 404, not an upstream error
         if (!c) return json(res, 404, { error: "channel not found" });
         if (tab === "head") return json(res, 200, { channel: c, subscribed: (await listSubs()).some((s) => s.id === id) });
@@ -496,7 +496,7 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
       const [page, subs] = await Promise.all([channelVideos(id, token), listSubs()]);
       return json(res, 200, { channel: c, page, subscribed: subs.some((s) => s.id === id) });
     } catch (e) {
-      if (e instanceof QuotaError) return json(res, 429, { error: e.message }, { "retry-after": String(e.retryAfter) });
+      if (e instanceof QuotaError) return classified(res, "rate-limited", e.message, e.retryAfter);
       throw e;
     }
   }

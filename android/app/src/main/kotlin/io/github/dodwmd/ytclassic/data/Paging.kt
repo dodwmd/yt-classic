@@ -19,12 +19,15 @@ data class PageState<T>(
     val error: String? = null,
     /** The failure was the access token: the footer offers Open Settings next to Retry. */
     val needsToken: Boolean = false,
+    /** The server's classified error code (private, rate-limited, ...) and retry flag, for [errorActions]. */
+    val code: String? = null,
+    val retryable: Boolean = true,
 ) {
     /** "Load more" is offered once the first page is in, there is a next one and nothing is running. */
     val canLoadMore: Boolean get() = started && token != null && !loading
 
     /** The state that the caller shows while a request is running. */
-    fun begin(): PageState<T> = copy(loading = true, error = null, needsToken = false)
+    fun begin(): PageState<T> = copy(loading = true, error = null, needsToken = false, code = null, retryable = true)
 
     /**
      * Fetches the next page (the first one when not [started]). A failure keeps what is shown and the token, so the
@@ -38,7 +41,7 @@ data class PageState<T>(
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException) {
-            copy(loading = false, error = e.message ?: "Something went wrong.", needsToken = e is AuthException)
+            copy(loading = false, error = e.message ?: "Something went wrong.", needsToken = e is AuthException, code = e.code, retryable = e.retryable)
         } catch (e: Exception) {
             // Anything else is a bug or a surprise: the user gets a generic message (and can retry), the caller gets the details.
             onUnexpected(e)
