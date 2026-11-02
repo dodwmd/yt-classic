@@ -49,6 +49,10 @@ class AuthTest {
                     else 200 to """{"auth":"${if (required) "required" else "none"}","authenticated":${ok || !required}}"""
                 required && !ok -> 401 to """{"error":"unauthorized"}"""
                 path == "/api/subscribe" -> 200 to """{"subscribed":true}"""
+                path == "/api/search" -> 200 to """{"channels":[]}"""
+                path == "/api/search/suggest" -> 200 to """{"suggestions":[]}"""
+                path == "/api/searches" -> 200 to """{"searches":[]}"""
+                path.startsWith("/api/searches/") -> 200 to """{"removed":true}"""
                 path == "/api/home" -> 200 to javaClass.getResource("/home.json")!!.readText()
                 else -> 404 to """{"error":"not found"}"""
             }
@@ -68,6 +72,20 @@ class AuthTest {
         a.home()
         assertTrue(a.setSubscribed("UCx", true))
         assertEquals(listOf<String?>("Bearer $secret", "Bearer $secret"), seenAuth)
+    }
+
+    @Test
+    fun everySearchCallCarriesTheBearer() = runBlocking {
+        val a = api(secret)
+        a.searchChannels("x")
+        a.search("x", null, "short", "date")
+        a.suggest("x")
+        a.recentSearches()
+        a.removeRecentSearch(3)
+        a.clearRecentSearches()
+        assertEquals(6, seenAuth.size)
+        assertTrue(seenAuth.all { it == "Bearer $secret" }, "$seenAuth")
+        assertTrue(seenUrls.none { secret in it }, "the token never goes into a URL")
     }
 
     @Test

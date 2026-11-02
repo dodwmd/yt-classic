@@ -20,7 +20,19 @@
 <div id="page">
   <noscript><p>This page needs JavaScript to load its data.</p></noscript>
   <p id="status" role="status">Loading&hellip;</p>
+  <form id="filters" action="/results" method="get" hidden>
+    <input type="hidden" name="search_query" id="fq">
+    <input type="hidden" name="type" id="ftype">
+    <nav class="types" aria-label="Result type"><a id="ty-video">Videos</a><a id="ty-channel">Channels</a></nav>
+    <span id="fopts">
+      <label>Length <select name="duration" id="fdur"><option value="any">Any</option><option value="short">Under 4 minutes</option><option value="medium">4 to 20 minutes</option><option value="long">Over 20 minutes</option></select></label>
+      <label>Sort by <select name="sort" id="fsort"><option value="relevance">Relevance</option><option value="date">Upload date</option><option value="views">View count</option></select></label>
+      <button type="submit">Apply</button>
+    </span>
+    <button type="button" id="clear-recent">Clear recent searches</button> <span id="clear-msg" role="status"></span>
+  </form>
   <h2 id="heading" hidden></h2>
+  <p id="notes" class="hint" role="note" hidden></p>
   <p id="none" hidden>No results.</p>
   <div id="results"></div>
   <nav class="pager" aria-label="Pagination"><a id="prev" hidden>&laquo; Previous</a> <a id="next" hidden>Next &raquo;</a></nav>
@@ -32,6 +44,17 @@
       <a class="title"></a>
       <div class="sub">by <a class="chan"></a><span class="extra"></span></div>
       <div class="desc"></div>
+    </div>
+  </div>
+</template>
+<template id="t-channel">
+  <div class="result chrow">
+    <a class="thumb"><img width="88" height="88" alt=""></a>
+    <div class="meta">
+      <a class="title"></a>
+      <div class="sub"><span class="extra"></span></div>
+      <div class="desc"></div>
+      <button type="button" class="subbtn"></button> <span class="suberr" role="alert"></span>
     </div>
   </div>
 </template>

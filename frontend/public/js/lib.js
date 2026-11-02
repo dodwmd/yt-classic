@@ -43,15 +43,9 @@ export function channelRequests(id, { tab, list, pageToken }) {
   return { head: base + "/head", body: base + (list ? "/playlist/" + encodeURIComponent(list) : TAB_PATH.get(tab)) + tok };
 }
 
-const WATCH = /^\/watch\?v=([\w-]{11})/, CHANNEL = /^\/channel\/(UC[\w-]{22})(?:\?([^#]*))?$/, LISTS = /^\/playlists(?:\?id=(\d{1,9}))?$/;
-const PAGES = new Map([["/history", "/history"], ["/subscriptions", "/subscriptions"], ["/tv", "/tv"]]);
-export function destination(next) {
-  const w = WATCH.exec(next), c = CHANNEL.exec(next), l = LISTS.exec(next);
-  return w ? "/watch?v=" + w[1] : c ? channelHref(c[1], channelParams(new URLSearchParams(c[2]))) : l ? "/playlists" + (l[1] ? "?id=" + l[1] : "") : PAGES.get(next) || "/";
-}
-
 const login = document.getElementById("login");
-if (login) login.action = "/api/login?next=" + encodeURIComponent(destination(new URLSearchParams(location.search).get("next")));
+// Where to go after logging in is worked out by dest.js, which only the login page loads.
+if (login) import("./dest.js").then((m) => (login.action = "/api/login?next=" + encodeURIComponent(m.destination(new URLSearchParams(location.search).get("next")))));
 
 export const clone = (id) => document.getElementById(id).content.firstElementChild.cloneNode(true);
 
@@ -67,6 +61,8 @@ export async function run(main) {
     status.textContent = note || "";
     status.hidden = !note;
     tvLink();
+    const box = $("#q"); // the suggestions code is only fetched once the search box is used
+    box?.addEventListener("focus", () => import("./suggest.js").then((m) => m.suggestions(box)).catch(() => {}), { once: true });
     fetch("/api/session").then((r) => r.json()).then((s) => ($("#foot").hidden = s.auth !== "required" || !s.authenticated)).catch(() => {});
   } catch (err) {
     status.textContent = err.message || String(err);

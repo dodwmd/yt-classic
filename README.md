@@ -30,7 +30,11 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
   Settings in the Android app); see [Importing and exporting subscriptions](#importing-and-exporting-subscriptions).
-- **Search**: classic results list, paged, using yt-dlp (no API quota).
+- **Search**: classic results list, paged, using yt-dlp (no API quota). A **Videos | Channels** toggle, a length filter
+  (under 4 min, 4 to 20 min, over 20 min) and a sort (relevance, upload date, view count) on the web results page (plain
+  GET form controls, so a results URL can be shared) and as chips in the Android app. Channel results have a
+  Subscribe/Unsubscribe button and are marked when you already follow them. The search box suggests as you type and
+  offers your recent searches when it is empty; see [Search, suggestions and recent searches](#search-suggestions-and-recent-searches).
 - **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar.
 - **Watch history and resume**: the watch page reports your position every ~10 s (and on pause, end and leaving), so a
   video resumes where you left off across restarts and devices. The home page has a "Continue watching" row with a
@@ -61,7 +65,7 @@ browser ──► nginx (frontend container) ──► Node/TypeScript backend (
 
 - **`backend/`** is a JSON API (`/api/home`, `/api/search`, `/api/video/:id`, `/api/channel/:id`, subscribe and
   unsubscribe, `POST /api/progress`, `GET /api/history?limit=&before=<cursor>`, `GET /api/history/watched?ids=a,b`,
-  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/tv/next`, `GET /api/tv/status`, `GET /api/feed`, `GET/POST /api/prefs`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
+  `DELETE /api/history/:id`, `POST /api/history/clear`, `GET /api/search?q=&type=video|channel&duration=any|short|medium|long&sort=relevance|date|views&pageToken=`, `GET /api/search/suggest?q=`, `GET /api/searches`, `DELETE /api/searches`, `DELETE /api/searches/:id`, `GET /api/tv/next`, `GET /api/tv/status`, `GET /api/feed`, `GET/POST /api/prefs`, `GET /api/playlists`, `POST /api/playlists` (`name`), `POST /api/playlists/:id/rename`, `DELETE /api/playlists/:id`, `GET /api/playlists/:id?limit=&before=<cursor>`, `POST /api/playlists/:id/items` (`id`), `DELETE /api/playlists/:id/items/:videoId`, `POST /api/playlists/:id/move` (`id`, `index`), `GET /api/playlists/membership?ids=a,b` (max 100), `/api/subscriptions/import` and `/export`) plus the video stream (`/stream/:id`). It contains no HTML.
 - **`frontend/`** is everything the browser gets: `index.html`, `results.html`, `watch.html`, `channel.html`, `subscriptions.html`, `playlists.html`, `tv.html`, `login.html`, the CSS,
   and the small JS modules in `public/js/`. nginx serves it and proxies `/api/` and `/stream/` to the backend.
   Data is put into pages with `textContent` and property assignment only, never as HTML strings.
@@ -521,12 +525,53 @@ The numeric settings must be whole numbers; anything else is logged and the defa
 URL parameters on the watch page: `q` (quality: 360, 480, 720, 1080), `t` (start offset in seconds), `a` (audio
 language code such as `pt`). For example `/watch?v=VIDEO_ID&q=1080&t=90`.
 
+### Search, suggestions and recent searches
+
+`GET /api/search` keeps its old parameters and response (`items`, `nextPageToken`, `prevPageToken`) and adds
+`type=video|channel` (default `video`), `duration=any|short|medium|long` (short is under 4 minutes, medium 4 to 20,
+long over 20), `sort=relevance|date|views` and a `notes` array in which the server says when a filter could only be
+approximated. Channel searches return `{channels: [{id, title, thumb, description, subscribers?, handle?, subscribed}], nextPageToken}`;
+ids are validated, thumbnails are https only.
+
+How it is done (all through yt-dlp first, so no quota): filters use YouTube's own results page
+(`https://www.youtube.com/results?search_query=<q>&sp=<filter>`) with `--flat-playlist`, so duration and sort are applied
+by YouTube itself, including date sort. Channel search uses the same page with the channel filter
+(`sp=EgIQAg%3D%3D`): it returns about 20 channels in two seconds with follower counts and `@handles`, which the Data
+API's `search.list` (100 units, and no subscriber count without a second call) does not. If the filtered page fails,
+plain `ytsearch` results are filtered by duration locally and `notes` says that sorting by date is not possible (views
+are ordered within the page only; such an approximated page is kept for a minute, not ten). Only when yt-dlp is down
+altogether does the Data API take over (`videoDuration`/`order`/`type=channel`), behind the same `SEARCH_FALLBACK_MAX`
+daily cap, with its own cache keys. The cap counts real API calls only (cache hits and failed calls do not spend), and
+the day and count are kept in the database (`meta` table), so a restart does not reset it.
+
+Search has **its own yt-dlp slots** (2 at a time, a queue of 4, a 20 second timeout), separate from the ones playback
+uses, so a flood of searches cannot starve playback. When they are all busy the request fails fast with HTTP 503 and
+`Retry-After`: a busy server is not treated as "yt-dlp is down" and never spends API quota. Searching and suggesting
+refuse cross-site requests (a page on another site cannot make your server search, record or spend quota), and nginx
+rate-limits `/api/search` and `/api/search/suggest` per client on top of the backend's own limits.
+
+`GET /api/search/suggest?q=` returns up to 8 suggestions: **this contacts Google** (`suggestqueries-clients6.youtube.com`),
+from your server, not from your browser or phone. The query is capped at 100 characters, there is a 2 second timeout
+and at most 64 KB of the answer is read, answers are kept in memory for 5 minutes (a failure for 30 seconds), at most
+30 requests a minute per client (HTTP 429 beyond that) and 120 in total go out, and any failure gives an empty list.
+Search queries are never logged: a failing yt-dlp is logged as its kind, exit code and first stderr line with URLs and
+the query removed, never its command line. Searching itself also contacts YouTube, as before. Both web and Android
+fetch suggestions only once the search box is used (the web script is loaded on first focus).
+
+Recent searches are stored **on the server**, in `yt.db` (table `searches`: the text and a timestamp), so the web and
+Android clients share them. A repeat (ignoring case and spacing) moves to the top, the newest 50 are kept, and only the
+first page of a successful search with at least one result is recorded (video or channel; not paging, not suggestions; a database problem never fails the search). `GET /api/searches` lists them,
+`DELETE /api/searches/:id` removes one and `DELETE /api/searches` clears all (writes refuse cross-origin requests).
+Same trust model as the watch history: anyone who can reach the API (or holds the access token) can read and clear them.
+The web results page has a "Clear recent searches" button; the Android search panel has "Clear all" and a remove button
+per entry.
+
 ## Limitations
 
 - **Seeking** outside the already-buffered part restarts the stream (about 1–2 seconds). There is no seek preview.
 - **Related videos** use YouTube's unofficial `/next` endpoint. If it stops working, the watch
   page falls back to "More from this channel" (1 quota unit).
-- **Search results** have no upload date, because the free yt-dlp search doesn't return one.
+- **Search results** have no upload date, because the free yt-dlp search doesn't return one (date *sort* still works: YouTube does the ordering).
 - **Comments, playlists, login, live streams and Shorts-specific pages** are not implemented.
 - Everything depends on yt-dlp keeping up with YouTube. If playback stops working, update yt-dlp first.
 
@@ -660,7 +705,9 @@ backend/
   src/metrics.ts         in-memory counters and the Prometheus text for /api/metrics (scrape.ts gathers the gauges)
   src/quota.ts           Data API units used today and the daily search-fallback cap
   src/status.ts          /api/status: resolve counters, persisted last success/failure, health
-  src/yt/search.ts       yt-dlp search (Data API fallback)
+  src/yt/search.ts       yt-dlp video and channel search with filters (Data API fallback)
+  src/searches.ts        recent searches (SQLite)
+  src/suggest.ts         search suggestions (YouTube's public suggest endpoint, cached, never logged)
   src/yt/innertube.ts    related videos from YouTube's /next
   src/yt/rss.ts          channel RSS feeds, merge
   src/feed.ts            feed paging, cursors and filters (Shorts, live, watched)

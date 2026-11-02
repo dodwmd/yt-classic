@@ -110,6 +110,9 @@ test("required mode: api and stream need credentials, healthz and session stay o
   assert.equal((await call("/api/metrics", { headers: bearerHdr(TOKEN) })).status, 200);
   assert.equal((await call("/api/nope")).status, 401, "unknown api paths do not reveal that they are unknown");
   assert.equal((await call("/api/subscribe", { method: "POST", body: "id=x" })).status, 401);
+  for (const p of ["/api/search?q=a", "/api/search?q=a&type=channel", "/api/search/suggest?q=a", "/api/searches"]) assert.equal((await call(p)).status, 401, p);
+  assert.equal((await call("/api/searches", { method: "DELETE" })).status, 401);
+  assert.equal((await call("/api/searches/1", { method: "DELETE" })).status, 401);
   assert.equal((await call("/healthz")).status, 200);
   assert.equal((await call("/healthz")).body, "ok");
   assert.deepEqual(JSON.parse((await call("/api/session")).body), { auth: "required", authenticated: false });

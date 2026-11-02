@@ -13,6 +13,9 @@ a { color: var(--link); text-decoration: none; } a:hover { text-decoration: unde
 .result { display: flex; gap: 12px; margin: 0 0 16px; } .result .thumb { position: relative; flex: none; }
 .result .dur { position: absolute; right: 2px; bottom: 2px; background: #000; color: #fff; font-size: 11px; padding: 0 3px; }
 .result .title { font-size: 16px; } .result .sub { color: var(--muted); margin: 2px 0; } .result .desc { color: var(--fg); }
+.types { display: inline-flex; border: 1px solid var(--line); border-radius: 4px; margin-right: 16px; overflow: hidden; } .types a { padding: 5px 14px; color: var(--link); } .types a[aria-current="page"] { background: var(--mast); color: var(--fg); font-weight: bold; }
+#filters { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: center; margin: 0 0 16px; } #fopts { display: contents; } #filters label { color: var(--muted); } #filters select { padding: 3px; margin-left: 4px; } #clear-msg { color: var(--muted); }
+.chrow .thumb img { width: 88px; height: 88px; border-radius: 50%; object-fit: cover; } .chrow .subbtn { margin-top: 6px; } .suberr { color: #c00; } @media (prefers-color-scheme: dark) { .suberr { color: #ff8a80; } }
 .pager { margin: 16px 0; display: flex; gap: 16px; }
 #tvbox { width: 640px; max-width: 100%; } #np { margin: 8px 0; } #tv-actions button { margin-right: 8px; }
 #watch { display: flex; gap: 24px; } #main { width: 640px; flex: none; } #main h1 { font-size: 20px; margin: 0 0 8px; }
@@ -49,7 +52,7 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 #import textarea { width: 100%; max-width: 560px; box-sizing: border-box; font: inherit; color: var(--fg); background: var(--bg); border: 1px solid var(--line); }
 .hint { color: var(--muted); max-width: 560px; } #result { font-weight: bold; }
 
-#foot { max-width: 960px; margin: 24px auto; padding: 8px 16px 0; border-top: 1px solid var(--line); } #foot form { margin: 0; }
+#foot, #statuslink { max-width: 960px; margin: 24px auto; padding: 8px 16px 0; border-top: 1px solid var(--line); } #foot form { margin: 0; }
 #login { max-width: 360px; } #login h2 { margin: 0 0 8px; } #login .hint { color: var(--muted); }
 #login label { display: block; margin: 12px 0 4px; } #login input { width: 100%; box-sizing: border-box; padding: 6px; } #login button { margin-top: 12px; }
 #login .msg { display: none; color: #c00; } #login .msg:target { display: block; } @media (prefers-color-scheme: dark) { #login .msg { color: #ff8a80; } }
@@ -59,7 +62,7 @@ video { background: #000; display: block; } .info { display: flex; justify-conte
 a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 
 #report { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; font: 13px monospace; }
-#foot { margin-top: 32px; color: var(--muted); }
+#foot, #statuslink { margin-top: 32px; color: var(--muted); }
 #filters { display: flex; flex-wrap: wrap; gap: 6px 16px; align-items: center; margin: 0 0 12px; } #filters label { display: inline-flex; align-items: center; gap: 4px; } #filters select { max-width: 220px; } #feed-msg { color: var(--muted); } #feed-err { color: #c00; } @media (prefers-color-scheme: dark) { #feed-err { color: #ff8a80; } } #more[aria-disabled="true"] { opacity: .6; cursor: progress; } #more { margin-top: 4px; }
 
 /* --- Small screens and touch. Desktop rules above are untouched; everything below only applies on phones/tablets. --- */
@@ -77,12 +80,12 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   #main h1 { font-size: 18px; } .info { flex-wrap: wrap; gap: 4px 16px; }
   .result .title { font-size: 17px; } .grid { gap: 16px 12px; }
   .later { min-width: 44px; min-height: 44px; } .later-msg { top: 48px; } .pl li { min-height: 44px; } .card { width: calc(50% - 6px); } .card .thumb img, .rel .thumb img, .result .thumb img { width: 100%; height: auto; aspect-ratio: 16/9; object-fit: cover; }
-  .result .thumb { width: 160px; } .rel .thumb { width: 140px; flex: none; }
+  .result .thumb { width: 160px; } .chrow .thumb { width: 88px; } .chrow .thumb img { width: 88px; height: 88px; aspect-ratio: 1; } .types a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; box-sizing: border-box; } #filters select { min-height: 40px; font-size: 16px; } .rel .thumb { width: 140px; flex: none; }
   #hist-bar { flex-wrap: wrap; gap: 8px 16px; } .chead { flex-wrap: wrap; } .banner { max-height: 120px; }
   #tabs a { display: inline-flex; align-items: center; min-height: 44px; box-sizing: border-box; } #tabs { scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
   .pager { gap: 8px; } .pager a, .quality a, #masthead #logo, #masthead #tvlink { display: inline-flex; align-items: center; min-height: 44px; padding: 0 8px; box-sizing: border-box; }
   #login { max-width: none; } #login input { font-size: 16px; min-height: 44px; }
-  #foot { padding: 8px 12px 0; }
+  #foot, #statuslink { padding: 8px 12px 0; }
   #filters label { min-height: 44px; } #filters input[type=checkbox] { width: 22px; height: 22px; } #filters select { min-height: 44px; font-size: 16px; max-width: 100%; }
   summary { padding: 12px 0; } #subs li a { display: inline-flex; align-items: center; min-height: 44px; }
   button, #masthead button { min-height: 44px; min-width: 44px; padding: 0 14px; font-size: 15px; }
@@ -92,7 +95,7 @@ a:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
   .controls .vol { width: 90px; min-height: 44px; margin: 0; flex: none; }
   .controls .pp { order: 1; } .controls .time { order: 2; } .controls .vol { order: 3; } .controls .fs { order: 4; }
 }
-@media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .controls .vol { display: none; } }
+@media (max-width: 420px) { .result { flex-direction: column; gap: 6px; } .result .thumb { width: 100%; max-width: 320px; } .chrow { flex-direction: row; gap: 12px; } .chrow .thumb { width: 88px; } .controls .vol { display: none; } }
 @media (max-height: 500px) and (orientation: landscape) and (max-width: 900px) {
   #player { max-width: calc((100vh - 170px) * 16 / 9); margin: 0 auto; }
   .controls { flex-wrap: nowrap; } .controls .bar { flex: 1 1 auto; order: 2; min-width: 0; } .controls .time { flex: none; order: 3; } .controls .vol { order: 4; } .controls .fs { order: 5; }

@@ -11,7 +11,9 @@ import { channelFeed, subscriptionFeed } from "./yt/rss.ts";
 import { FEED_CAP, HOME_PAGE, MAX_FEED_PAGE, decodeCursor, feedPage, parseFilter } from "./feed.ts";
 import { getPrefs, parsePrefs, setPrefs } from "./prefs.ts";
 import { TV_MIN_SUBS, MAX_SEEN_PARAM, TvLimiter, parseSeen, pickNext } from "./tv.ts";
-import { MAX_QUERY, search } from "./yt/search.ts";
+import { DURATIONS, MAX_QUERY, SORTS, search, searchChannels } from "./yt/search.ts";
+import { clearSearches, listSearches, recordSearch, removeSearch } from "./searches.ts";
+import { MAX_SUGGEST_QUERY, suggest } from "./suggest.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { logSafe } from "./http.ts";
@@ -315,12 +317,56 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     return json(res, 200, { video: v, channelId: v.channelId, quality, qualities: QUALITIES, lang: "", progress: getProgress(v.id) ?? undefined });
   }
 
+  if (path === "/api/search/suggest") {
+    // Like /api/tv/next: a GET that makes the server contact someone else, so a cross-site <img> must not trigger it.
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    const q = param("q").trim();
+    if (q.length > MAX_SUGGEST_QUERY) return json(res, 400, { error: "query too long" });
+    const suggestions = await suggest(q, ip);
+    if (!suggestions) return json(res, 429, { error: "too many suggestion requests; slow down" }, { "retry-after": "30" });
+    return json(res, 200, { suggestions });
+  }
+
   if (path === "/api/search") {
+    // Searching spawns yt-dlp, may spend API quota and is remembered: refuse cross-site triggers, as for the writes.
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
     const q = param("q").trim();
     const token = param("pageToken");
+    const type = param("type") || "video";
+    const duration = param("duration") || "any";
+    const sort = param("sort") || "relevance";
     if (!q) return json(res, 400, { error: "missing query" });
     if (q.length > MAX_QUERY || token.length > 200) return json(res, 400, { error: "query too long" });
-    return json(res, 200, await search(q, token));
+    if (type !== "video" && type !== "channel") return json(res, 400, { error: "bad type" });
+    if (!DURATIONS.includes(duration as never) || !SORTS.includes(sort as never)) return json(res, 400, { error: "bad filter" });
+    let body;
+    if (type === "channel") {
+      const page = await searchChannels(q, token);
+      const mine = new Set((await listSubs()).map((s) => s.id));
+      body = { ...page, channels: page.channels.map((c) => ({ ...c, subscribed: mine.has(c.id) })) };
+    } else {
+      body = await search(q, token, { duration: duration as never, sort: sort as never });
+    }
+    const found = type === "channel" ? (body as { channels: unknown[] }).channels.length : (body as { items: unknown[] }).items.length;
+    if (!token && found) {
+      // A successful, non-empty first page only (paging is not a new search); a database problem never breaks a search.
+      try {
+        recordSearch(q);
+      } catch (e) {
+        console.error(`recording a search failed: ${(e as Error).message.split("\n")[0]}`);
+      }
+    }
+    return json(res, 200, body);
+  }
+
+  if (path === "/api/searches" || path.startsWith("/api/searches/")) {
+    if (req.method === "GET" && path === "/api/searches") return json(res, 200, { searches: listSearches() });
+    if (req.method !== "DELETE") return json(res, 405, { error: "method not allowed" });
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    if (path === "/api/searches") return json(res, 200, { removed: clearSearches() });
+    const id = path.slice("/api/searches/".length);
+    if (!/^\d{1,12}$/.test(id)) return json(res, 400, { error: "bad id" });
+    return json(res, 200, { removed: removeSearch(Number(id)) });
   }
 
   if (path.startsWith("/api/video/")) {

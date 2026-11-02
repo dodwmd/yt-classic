@@ -16,12 +16,16 @@ const htmlFiles = readdirSync(PUBLIC).filter((f) => f.endsWith(".html"));
 // you really need to. (A total across all files would make every new page compete with every other page.)
 const BUDGET_GZIP_BYTES = 8 * 1024;
 
-function importGraph(entry, seen = new Set()) {
+function importGraph(entry, seen = new Set(), lazy = false) {
   if (seen.has(entry)) return seen;
   seen.add(entry);
-  for (const m of read(`js/${entry}`).matchAll(/\bfrom\s+"\.\/([\w.-]+\.js)"/g)) importGraph(m[1], seen);
+  const src = read(`js/${entry}`);
+  for (const m of src.matchAll(/\bfrom\s+"\.\/([\w.-]+\.js)"/g)) importGraph(m[1], seen, lazy);
+  // import("./x.js") loads on demand, after the page works: not part of its initial budget, but it must exist and stay small.
+  if (lazy) for (const m of src.matchAll(/\bimport\("\.\/([\w.-]+\.js)"\)/g)) importGraph(m[1], seen, lazy);
   return seen;
 }
+const LAZY_BUDGET_GZIP_BYTES = 2 * 1024;
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 
 test("JavaScript per page stays within the size budget", () => {
@@ -38,7 +42,13 @@ test("JavaScript per page stays within the size budget", () => {
     assert.ok(total <= BUDGET_GZIP_BYTES, `${page} ships ${total} bytes of JS gzipped, budget is ${BUDGET_GZIP_BYTES}`);
   }
   // Every script is reachable from some page (no orphaned code quietly accumulating).
-  const reachable = new Set([...entries.values()].flatMap((e) => [...importGraph(e)]));
+  const reachable = new Set([...entries.values()].flatMap((e) => [...importGraph(e, new Set(), true)]));
+  for (const e of new Set(entries.values())) {
+    const lazyOnly = [...importGraph(e, new Set(), true)].filter((f) => !importGraph(e).has(f));
+    const total = lazyOnly.reduce((n, f) => n + gz(f), 0);
+    if (lazyOnly.length) console.log(`# JS ${e} loads on demand: ${lazyOnly.join(" + ")} = ${total} bytes gzipped`);
+    assert.ok(total <= LAZY_BUDGET_GZIP_BYTES, `${e} lazily loads ${total} bytes`);
+  }
   for (const f of jsFiles) assert.ok(reachable.has(f), `${f} is not used by any page`);
 });
 
@@ -189,7 +199,7 @@ test("markWatched decorates each thumb once, and only when the membership is kno
 
 test("destination() only ever returns one of the known pages, rebuilt from constants and validated ids", async () => {
   globalThis.document = { getElementById: () => null }; // lib.js looks up the login form when it loads
-  const { destination } = await import("../public/js/lib.js");
+  const { destination } = await import("../public/js/dest.js");
   const ID = "dQw4w9WgXcQ", UC = "UC" + "a".repeat(22);
   const hostile = ["//evil.com", "/\\evil.com", "/\t/evil.com", "/\n/evil.com", "/%09/evil.com", "/%0a/evil.com", "javascript:alert(1)", "https://evil.com", "http://evil.com/watch?v=" + ID,
     "evil.com", "", null, undefined, "x", "/history/../../evil", "/history?x=1", "/watch?v=short", "/watch?v=" + ID.slice(1) + "<", "/watch", "/watch?v=%3Cscript%3E123",
@@ -219,7 +229,13 @@ test("destination() only ever returns one of the known pages, rebuilt from const
   assert.equal(destination(`/channel/${UC}?tab=evil`), `/channel/${UC}`);
   assert.equal(destination(`/channel/${UC}?`), `/channel/${UC}`);
   for (const bad of [`/channel/${UC}?tab=shorts#//evil.com`, `/channel/${UC}/?tab=shorts`, `/channel/${UC}x?tab=shorts`]) assert.equal(destination(bad), "/", bad);
-  assert.equal(destination("/results?search_query=nix+os"), "/", "search pages fall back to the home page");
+  const good = { "/results?search_query=nix+os": "/results?search_query=nix+os", "/results?search_query=nix%20os": "/results?search_query=nix%20os", "/results?search_query=%C3%A9t%C3%A9": "/results?search_query=%C3%A9t%C3%A9",
+    "/results?search_query=cats&type=channel": "/results?search_query=cats&type=channel", "/results?search_query=cats&type=video&duration=short&sort=views": "/results?search_query=cats&type=video&duration=short&sort=views" };
+  for (const [from, to] of Object.entries(good)) assert.equal(destination(from), to, from);
+  const badResults = ["/results", "/results?", "/results?search_query=", "/results?search_query=%20", "/results?search_query=a&type=playlist", "/results?search_query=a&type=video&type=channel", "/results?search_query=a&evil=1",
+    "/results?search_query=a&type=channel&x=//evil.com", "/results?search_query=a%0Ab", "/results?search_query=a%00", "/results?search_query=%E0%A4%A", "/results?search_query=a&sort=__proto__", "/results?x=1&search_query=a", "//results?search_query=a",
+    "/results?search_query=a&pageToken=2", "/results?search_query=a&duration=any&sort=date&type=channel&duration=short"];
+  for (const bad of badResults) assert.equal(destination(bad), "/", bad);
   // Through the real query-string decoding that the login page uses (%09 turns into a TAB there).
   for (const evil of ["/%09/evil.com", "/%0a/evil.com", "//evil.com", "/%5cevil.com"]) assert.equal(destination(new URLSearchParams(`next=${evil}`).get("next")), "/", evil);
   const out = destination(`/watch?v=${ID}&x=//evil.com`);
@@ -242,4 +258,25 @@ test("home: every feed filter is a labelled control and the script saves them th
   assert.match(js, /\/api\/prefs/);
   assert.match(js, /\/api\/feed/);
   assert.match(html, /<button type="button" id="more"/);
+});
+
+test("no page uses the same id twice (a template and a link once shared one, which broke lookups)", () => {
+  for (const f of htmlFiles) {
+    const ids = [...read(f).matchAll(/\bid="([^"]+)"/g)].map((m) => m[1]);
+    assert.deepEqual(ids.filter((id, i) => ids.indexOf(id) !== i), [], `${f} repeats an id`);
+  }
+});
+
+test("nginx rate-limits search and suggestions on their own exact locations", () => {
+  const conf = readFileSync(new URL("../nginx.conf", import.meta.url), "utf8").replace(/#.*$/gm, "");
+  assert.match(conf, /limit_req_zone [^;]*zone=search_req:\S+ rate=\d+r\/m;/);
+  assert.match(conf, /limit_req_zone [^;]*zone=suggest_req:\S+ rate=\d+r\/m;/);
+  assert.match(conf, /location = \/api\/search \{[^}]*limit_req zone=search_req burst=\d+[^}]*proxy_pass/s);
+  assert.match(conf, /location = \/api\/search\/suggest \{[^}]*limit_req zone=suggest_req burst=\d+[^}]*proxy_pass/s);
+});
+
+test("suggest.js is fetched lazily, only when the search box is focused", () => {
+  const lib = read("js/lib.js");
+  assert.doesNotMatch(lib, /from "\.\/suggest\.js"/);
+  assert.match(lib, /addEventListener\("focus", \(\) => import\("\.\/suggest\.js"\)/);
 });
