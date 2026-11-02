@@ -79,6 +79,8 @@ val ApiJson = Json {
     coerceInputValues = true
 }
 
+private const val MAX_SHEET_BYTES = 2L * 1024 * 1024
+
 /** Client for the YouTube Classic backend. [server] is read on every call so a settings change applies immediately. */
 class YtApi(
     private val server: suspend () -> String,
@@ -176,6 +178,27 @@ class YtApi(
             if (it.code == 401) throw AuthException(token().isNotBlank())
             if (!it.isSuccessful) throw apiErrorFrom(it.code, text)
             text
+        }
+    }
+
+    /** The storyboard descriptor for scrub previews; null when the video has none. */
+    suspend fun storyboard(videoId: String): Storyboard? =
+        try { get<Storyboard>("api/video/$videoId/storyboard") } catch (e: ApiException) { if (e.code == "no-storyboard") null else throw e }
+
+    /** Sheet [n] of the storyboard (a JPEG, WebP or PNG of at most [MAX_SHEET_BYTES]); the token goes along like for every call. */
+    suspend fun storyboardSheet(videoId: String, n: Int): ByteArray = withContext(Dispatchers.IO) {
+        execute(request(url("api/video/$videoId/storyboard/$n.jpg")).build()).use {
+            if (it.code == 401) throw AuthException(token().isNotBlank())
+            if (!it.isSuccessful) throw apiErrorFrom(it.code, it.body.string())
+            val len = it.body.contentLength()
+            val source = it.body.source()
+            if (len > MAX_SHEET_BYTES) throw ApiException("Preview image too large.")
+            if (len >= 0) source.readByteArray(len)
+            else { // no length (a proxy re-chunked it): read at most one byte more than allowed, and refuse anything bigger
+                source.request(MAX_SHEET_BYTES + 1)
+                if (source.buffer.size > MAX_SHEET_BYTES) throw ApiException("Preview image too large.")
+                source.buffer.readByteArray()
+            }
         }
     }
 

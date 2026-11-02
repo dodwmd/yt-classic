@@ -42,6 +42,7 @@ export const LAZY_CAPS = {
   "quality.js": 2050,
   "chapters.js": 2250,
   "subs.js": 3050,
+  "previews.js": 1700,
 };
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 

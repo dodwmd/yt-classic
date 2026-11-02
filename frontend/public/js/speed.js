@@ -107,6 +107,12 @@ export function speedControls({ root, v, seek, now, setTap, toggle }) {
     if (isDouble(z, e.timeStamp) || run.open(z)) return step(z);
     single = setTimeout(toggle, TAP_MS);
   });
+  // Scrub previews load on the first pointer over the seek bar.
+  const bar = root.querySelector(".bar"), arm = () => {
+    for (const t of ["pointerenter", "pointerdown"]) bar.removeEventListener(t, arm);
+    import("./previews.js").then((m) => m.previews(root, bar)).catch(() => {});
+  };
+  for (const t of ["pointerenter", "pointerdown"]) bar.addEventListener(t, arm);
   v.addEventListener("dblclick", (e) => {
     const z = sideOf(e);
     if (z && e.timeStamp - touchAt > 1000) step(z); // a touch double tap is handled above

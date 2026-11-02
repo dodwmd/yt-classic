@@ -19,10 +19,11 @@ import { DURATIONS, MAX_QUERY, SORTS, search, searchChannels } from "./yt/search
 import { clearSearches, listSearches, recordSearch, removeSearch } from "./searches.ts";
 import { MAX_SUGGEST_QUERY, suggest } from "./suggest.ts";
 import { subTracks, subVtt, SUB_LANG } from "./yt/subs.ts";
+import { sheet as storyboardSheet, storyboard } from "./yt/storyboard.ts";
 import { relatedFor } from "./yt/related.ts";
 import { statusPage, statusReport } from "./status.ts";
 import { logSafe } from "./http.ts";
-import { INFO, classifyError, errorBody, type ErrorCode } from "./errors.ts";
+import { INFO, NoStoryboard, NoSubtitles, classifyError, errorBody, type ErrorCode } from "./errors.ts";
 import { countError, countRequest, routeClass } from "./metrics.ts";
 import { metricsText } from "./scrape.ts";
 import { MAX_PAGE, newRowAllowed, MAX_SECONDS, MIN_START, clearHistory, continueWatching, getProgress, isKnown, listHistory, recordProgress, removeHistory, watchedAmong } from "./history.ts";
@@ -432,6 +433,19 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     return void res.writeHead(200, { "content-type": "text/vtt; charset=utf-8", "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" }).end(vtt);
   }
 
+  const sb = /^\/api\/video\/([\w-]{11})\/storyboard(?:\/([^/]*))?$/.exec(path);
+  if (sb) {
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" });
+    const num = sb[2] === undefined ? null : /^(\d{1,4})\.jpg$/.exec(sb[2]);
+    if (sb[2] !== undefined && !num) return json(res, 400, { error: "bad sheet number" });
+    const d = await storyboard(sb[1]);
+    if (!num) return json(res, 200, d, { "cache-control": "private, max-age=300" });
+    const n = Number(num[1]);
+    if (n >= d.tiles.sheets) throw new NoStoryboard("sheet out of range");
+    const s = await storyboardSheet(sb[1], n);
+    return void res.writeHead(200, { "content-type": s.type, "content-length": s.body.length, "cache-control": "private, max-age=3600", "x-content-type-options": "nosniff" }).end(s.body);
+  }
+
   if (path.startsWith("/api/video/")) {
     const id = path.slice("/api/video/".length);
     if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
@@ -681,7 +695,8 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
 const METHODS = ["GET", "HEAD", "POST", "PUT", "DELETE", "OPTIONS"];
 
 function fail(err: unknown, res: ServerResponse): void {
-  console.error(logSafe(err instanceof Error ? (err.stack ?? err.message) : err, 4000)); // one line: error text can echo request data
+  // Expected outcomes (no subtitles, no storyboard) are one short line, not a stack.
+  console.error(logSafe(err instanceof NoStoryboard || err instanceof NoSubtitles ? err.message : err instanceof Error ? (err.stack ?? err.message) : err, 4000)); // one line: error text can echo request data
   const code = classifyError(err);
   if (res.headersSent) return void (countError(code), res.destroy());
   // Operator-facing config problems are safe and useful to show; everything else is logged, not echoed.
