@@ -3,14 +3,17 @@ package io.github.dodwmd.ytclassic.data
 import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import io.github.dodwmd.ytclassic.player.clampSpeed
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "settings")
 private val SERVER_URL = stringPreferencesKey("server_url")
 private val ACCESS_TOKEN = stringPreferencesKey("access_token")
+private val PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
 private val BACKGROUND_AUDIO = booleanPreferencesKey("background_audio")
 private val PICTURE_IN_PICTURE = booleanPreferencesKey("picture_in_picture")
 
@@ -49,5 +52,12 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setPictureInPicture(on: Boolean) {
         context.dataStore.edit { it[PICTURE_IN_PICTURE] = on }
+    }
+
+    /** The playback speed chosen in the player: one global default (no per-video memory), kept across videos and TV. */
+    val playbackSpeed: Flow<Float> = context.dataStore.data.map { clampSpeed(it[PLAYBACK_SPEED]) }
+
+    suspend fun setPlaybackSpeed(speed: Float) {
+        context.dataStore.edit { it[PLAYBACK_SPEED] = clampSpeed(speed) }
     }
 }

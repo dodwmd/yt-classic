@@ -35,7 +35,7 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   GET form controls, so a results URL can be shared) and as chips in the Android app. Channel results have a
   Subscribe/Unsubscribe button and are marked when you already follow them. The search box suggests as you type and
   offers your recent searches when it is empty; see [Search, suggestions and recent searches](#search-suggestions-and-recent-searches).
-- **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar.
+- **Watch page**: playback in a plain `<video>` tag, a related-videos list, quality links (360/480/720/1080p) and a seek bar, a playback speed selector (0.5x to 2x, remembered in the browser; `<` and `>` change it) and double-click/double-tap on the left or right third of the video to seek 10 s (repeated taps add up; the single tap still plays/pauses). The speed code is the lazily loaded `speed.js`.
 - **Watch history and resume**: the watch page reports your position every ~10 s (and on pause, end and leaving), so a
   video resumes where you left off across restarts and devices. The home page has a "Continue watching" row with a
   progress bar, videos watched to the end get a "Watched" badge in the feed, search, channel and related lists, and
@@ -467,6 +467,8 @@ player does the same). Expect a second or two of buffering after a seek.
 The key comes from the repository secrets `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`
 and `ANDROID_KEY_PASSWORD`; keep a backup of the keystore, because losing it means a new install is needed.
 
+**Speed and gestures:** the `1x` button next to the seek bar (also in fullscreen) opens a menu of 0.5x to 2x (pitch corrected); the choice is one global default kept in DataStore, also for TV. Double-tap the left or right third of the video to seek 10 s; further double taps within 0.7 s add up and the stream restarts once. TalkBack has "Rewind/Forward 10 seconds" actions on the video. Positions stay in media time at any speed.
+
 **Fullscreen:** the corner-brackets button next to the seek bar plays the video fullscreen and hides the system bars. On
 phones it also switches to landscape; Android 16+ ignores orientation requests on large screens (smallest width of
 600dp or more) and in multi-window, so there only the bars are hidden. Tap the video to hide the controls, Back to leave.
@@ -738,7 +740,7 @@ backend/
 frontend/
   public/*.html          the pages, with <template> blocks (all of the HTML)
   public/classic.css     the classic look; follows the system light/dark setting
-  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar)
+  public/js/             vanilla JS: lib (helpers), fmt (formatting), one module per page, player (seek bar), speed (lazy: speed and double-tap seek)
   test/                  formatter tests and the JS guardrails (size budget, no unsafe sinks, same-origin only)
   nginx.conf             page routes, security headers, reverse proxy for /api and /stream (re-resolves `backend` at runtime)
   05-resolver.sh         at start, turns the container's DNS server into nginx's `resolver` line

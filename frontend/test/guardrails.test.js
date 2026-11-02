@@ -16,16 +16,22 @@ const htmlFiles = readdirSync(PUBLIC).filter((f) => f.endsWith(".html"));
 // you really need to. (A total across all files would make every new page compete with every other page.)
 const BUDGET_GZIP_BYTES = 8 * 1024;
 
+// Quotes may be ', " or `; a lazy module's own static imports count too (importGraph recurses).
+export const STATIC_IMPORT = /\bfrom\s*["'`]\.\/([\w.-]+\.js)["'`]/g;
+export const LAZY_IMPORT = /\bimport\(\s*["'`]\.\/([\w.-]+\.js)["'`]\s*\)/g;
+export const ANY_DYNAMIC_IMPORT = /\bimport\s*\(/g;
+
 function importGraph(entry, seen = new Set(), lazy = false) {
   if (seen.has(entry)) return seen;
   seen.add(entry);
   const src = read(`js/${entry}`);
-  for (const m of src.matchAll(/\bfrom\s+"\.\/([\w.-]+\.js)"/g)) importGraph(m[1], seen, lazy);
+  for (const m of src.matchAll(STATIC_IMPORT)) importGraph(m[1], seen, lazy);
   // import("./x.js") loads on demand, after the page works: not part of its initial budget, but it must exist and stay small.
-  if (lazy) for (const m of src.matchAll(/\bimport\("\.\/([\w.-]+\.js)"\)/g)) importGraph(m[1], seen, lazy);
+  if (lazy) for (const m of src.matchAll(LAZY_IMPORT)) importGraph(m[1], seen, lazy);
   return seen;
 }
-const LAZY_BUDGET_GZIP_BYTES = 2 * 1024;
+const LAZY_MODULE_GZIP_BYTES = 3 * 1024; // each on-demand module (it loads after the page works)
+const LAZY_TOTAL_GZIP_BYTES = 5 * 1024; // everything a page may still load on demand
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 
 test("JavaScript per page stays within the size budget", () => {
@@ -47,7 +53,8 @@ test("JavaScript per page stays within the size budget", () => {
     const lazyOnly = [...importGraph(e, new Set(), true)].filter((f) => !importGraph(e).has(f));
     const total = lazyOnly.reduce((n, f) => n + gz(f), 0);
     if (lazyOnly.length) console.log(`# JS ${e} loads on demand: ${lazyOnly.join(" + ")} = ${total} bytes gzipped`);
-    assert.ok(total <= LAZY_BUDGET_GZIP_BYTES, `${e} lazily loads ${total} bytes`);
+    for (const f of lazyOnly) assert.ok(gz(f) <= LAZY_MODULE_GZIP_BYTES, `${f} is a ${gz(f)}-byte lazy module`);
+    assert.ok(total <= LAZY_TOTAL_GZIP_BYTES, `${e} lazily loads ${total} bytes`);
   }
   for (const f of jsFiles) assert.ok(reachable.has(f), `${f} is not used by any page`);
 });
@@ -279,4 +286,20 @@ test("suggest.js is fetched lazily, only when the search box is focused", () => 
   const lib = read("js/lib.js");
   assert.doesNotMatch(lib, /from "\.\/suggest\.js"/);
   assert.match(lib, /addEventListener\("focus", \(\) => import\("\.\/suggest\.js"\)/);
+});
+
+test("every dynamic import is a literal the budget test can follow", () => {
+  for (const f of jsFiles) {
+    const src = read(`js/${f}`);
+    const all = [...src.matchAll(ANY_DYNAMIC_IMPORT)].length;
+    assert.equal([...src.matchAll(LAZY_IMPORT)].length, all, `${f} has an import() the guardrails cannot classify (use a literal ./x.js path)`);
+  }
+});
+
+test("the import patterns accept every quote style", () => {
+  for (const q of ["'", '"', "`"]) {
+    assert.deepEqual([...`import(${q}./a.js${q})`.matchAll(LAZY_IMPORT)].map((m) => m[1]), ["a.js"]);
+    assert.deepEqual([...`import { x } from ${q}./b.js${q}`.matchAll(STATIC_IMPORT)].map((m) => m[1]), ["b.js"]);
+  }
+  assert.equal([...`import(name)`.matchAll(LAZY_IMPORT)].length, 0);
 });

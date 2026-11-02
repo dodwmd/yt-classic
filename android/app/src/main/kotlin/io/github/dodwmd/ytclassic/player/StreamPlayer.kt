@@ -1,11 +1,27 @@
 package io.github.dodwmd.ytclassic.player
 
 import androidx.annotation.OptIn
+import android.provider.Settings
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.CustomAccessibilityAction
+import androidx.compose.ui.semantics.customActions
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.heightIn
@@ -87,7 +103,9 @@ fun StreamPlayer(
     onSkip: (() -> Unit)? = null,
     onStop: (() -> Unit)? = null,
 ) {
-    val host = (LocalContext.current.applicationContext as App).host
+    val app = LocalContext.current.applicationContext as App
+    val host = app.host
+    val reduceMotion = remember { Settings.Global.getFloat(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f }
     val total = video.durationSeconds ?: 0L
     var positionSec by remember(video.id) { mutableLongStateOf(startSeconds) }
     var dragging by remember(video.id) { mutableStateOf<Float?>(null) }
@@ -123,6 +141,27 @@ fun StreamPlayer(
         }
     }
 
+    // Double tap on the left or right third seeks 10 s; further double taps within 700 ms add up and the stream is
+    // restarted once, when they stop.
+    val run = remember(video.id) { TapSeekRun() }
+    var taps by remember(video.id) { mutableIntStateOf(0) }
+    var overlay by remember(video.id) { mutableStateOf<Pair<TapZone, Long>?>(null) }
+    LaunchedEffect(taps) {
+        if (taps == 0) return@LaunchedEffect
+        delay(TAP_ACCUMULATE_MS) // the run ends when the taps stop
+        if (run.active && host.video?.id == video.id) host.load(run.target)
+        run.finish()
+        overlay = null
+    }
+    fun doubleTapAt(zone: TapZone) {
+        if (zone == TapZone.Middle || total <= 0 || host.video?.id != video.id) return
+        overlay = zone to run.add(zone, host.positionSeconds())
+        taps++
+    }
+    // Any other seek replaces a pending double-tap run, so its stale target can't override it later.
+    fun cancelRun() { run.finish(); overlay = null }
+    fun jump(seconds: Long) { cancelRun(); host.load(host.positionSeconds() + seconds) }
+
     val textColor = if (fullscreen) Color.White else LocalContentColor.current
     val transport: @Composable () -> Unit = {
         Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -135,6 +174,7 @@ fun StreamPlayer(
                     value = dragging ?: positionSec.toFloat(),
                     onValueChange = { dragging = it },
                     onValueChangeFinished = {
+                        cancelRun()
                         dragging?.let { host.load(it.toLong()) }
                         dragging = null
                     },
@@ -146,6 +186,25 @@ fun StreamPlayer(
                     },
                 )
                 Text("${formatSeconds((dragging ?: positionSec.toFloat()).toLong())} / ${formatSeconds(total)}", color = textColor, modifier = Modifier.padding(horizontal = 8.dp))
+            }
+            var speedMenu by remember { mutableStateOf(false) }
+            Box {
+                TextButton(
+                    onClick = { speedMenu = true },
+                    modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Playback speed ${speedLabel(host.speed)}" },
+                ) { Text(speedLabel(host.speed), color = textColor) }
+                DropdownMenu(expanded = speedMenu, onDismissRequest = { speedMenu = false }) {
+                    for (s in PLAYBACK_SPEEDS) {
+                        DropdownMenuItem(
+                            text = { Text(speedLabel(s)) },
+                            onClick = {
+                                speedMenu = false
+                                host.changeSpeed(s) // applies it and keeps it as the global default
+                            },
+                            modifier = Modifier.semantics { role = Role.RadioButton; selected = s == host.speed; stateDescription = if (s == host.speed) "Selected" else "Not selected" },
+                        )
+                    }
+                }
             }
             if (onSkip != null) TextButton(onClick = onSkip, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Skip", color = textColor) }
             if (onStop != null) TextButton(onClick = onStop, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Stop", color = textColor) }
@@ -161,7 +220,7 @@ fun StreamPlayer(
     }
     // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
     // surface may still redraw for a frame when it is re-attached).
-    val videoView = remember(host) { movableContentOf { m: Modifier ->
+    val videoView = remember(host) { movableContentOf { m: Modifier, overlay: Pair<TapZone, Long>?, taps: Int ->
         Box(m.onGloballyPositioned {
             val r = it.boundsInWindow()
             // The picture inside the view (not the black bars), as the transition's source.
@@ -175,6 +234,7 @@ fun StreamPlayer(
                 onRelease = { it.player = null },
                 modifier = Modifier.matchParentSize(),
             )
+            overlay?.let { (zone, delta) -> TapSeekOverlay(zone, delta, taps, reduceMotion, Modifier.align(if (zone == TapZone.Back) Alignment.CenterStart else Alignment.CenterEnd)) }
             if (host.buffering && host.error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             host.error?.let { message ->
                 Column(
@@ -195,15 +255,36 @@ fun StreamPlayer(
         }
     } }
 
+    // Taps on the video (read through rememberUpdatedState: the pointer block lives as long as its key, and in TV mode
+    // this composable stays while the video changes): a double tap seeks (above); in fullscreen a single tap shows or hides the controls.
+    // TalkBack gets the same as actions on the video, since it can't double tap a third of the screen.
+    val onTap by rememberUpdatedState { if (fullscreen) controlsVisible = !controlsVisible }
+    val onDoubleTap by rememberUpdatedState { zone: TapZone -> doubleTapAt(zone) }
+    val gestures = Modifier
+        .pointerInput(video.id) {
+            detectTapGestures(
+                onTap = { onTap() },
+                onDoubleTap = { onDoubleTap(tapZone(it.x, size.width.toFloat())) },
+            )
+        }
+        .semantics {
+            if (fullscreen || pip.inPip) {
+                role = Role.Button
+                onClick(if (controlsVisible) "Hide controls" else "Show controls") { controlsVisible = !controlsVisible; true }
+            }
+            if (total > 0) customActions = listOf(
+                CustomAccessibilityAction("Rewind 10 seconds") { jump(-TAP_SEEK_SECONDS); true },
+                CustomAccessibilityAction("Forward 10 seconds") { jump(TAP_SEEK_SECONDS); true },
+            )
+        }
+
     if (fullscreen || pip.inPip) {
         // The video fills the screen; tap it to show or hide the controls laid over the bottom.
         Box(modifier.fillMaxSize().background(Color.Black)) {
             videoView(
-                // In the small window the system owns taps (they show its own buttons): no click target there.
-                if (pip.inPip) Modifier.fillMaxSize() else Modifier.fillMaxSize().clickable(
-                    interactionSource = remember { MutableInteractionSource() }, indication = null,
-                    role = Role.Button, onClickLabel = if (controlsVisible) "Hide controls" else "Show controls",
-                ) { controlsVisible = !controlsVisible }.semantics { contentDescription = "Video" },
+                // In the small window the system owns taps (they show its own buttons): no gesture or click target there.
+                if (pip.inPip) Modifier.fillMaxSize() else Modifier.fillMaxSize().then(gestures).semantics { contentDescription = "Video" },
+                overlay, taps,
             )
             if (controlsVisible && !pip.inPip) {
                 Column(
@@ -217,7 +298,7 @@ fun StreamPlayer(
             // In landscape a full-width 16:9 box would fill the screen; cap its height so the details stay reachable.
             val maxHeight = with(LocalDensity.current) { (LocalWindowInfo.current.containerSize.height * 0.6f).toDp() }
             Box(Modifier.fillMaxWidth().background(Color.Black), contentAlignment = Alignment.Center) {
-                videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f))
+                videoView(Modifier.heightIn(max = maxHeight).aspectRatio(16f / 9f).then(if (pip.inPip) Modifier else gestures), overlay, taps)
             }
             transport()
             Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -226,5 +307,24 @@ fun StreamPlayer(
                 }
             }
         }
+    }
+}
+
+/** "-10" / "+10" (running total) on the side that was double tapped, with a fading ripple unless animations are off. */
+@Composable
+private fun TapSeekOverlay(zone: TapZone, delta: Long, taps: Int, reduceMotion: Boolean, modifier: Modifier) {
+    val ripple = remember { Animatable(0f) }
+    LaunchedEffect(taps) {
+        if (reduceMotion) return@LaunchedEffect
+        ripple.snapTo(0.5f)
+        ripple.animateTo(0f, tween(600))
+    }
+    Box(modifier.padding(horizontal = 24.dp), contentAlignment = Alignment.Center) {
+        Box(Modifier.size(96.dp).alpha(ripple.value).clip(CircleShape).background(Color.White))
+        Text(
+            (if (delta > 0) "+" else "") + delta, color = Color.White,
+            modifier = Modifier.clip(RoundedCornerShape(24.dp)).background(Color.Black.copy(alpha = 0.7f)).padding(horizontal = 14.dp, vertical = 8.dp)
+                .semantics { liveRegion = LiveRegionMode.Polite; contentDescription = (if (delta > 0) "Forward " else "Rewind ") + kotlin.math.abs(delta) + " seconds" },
+        )
     }
 }
