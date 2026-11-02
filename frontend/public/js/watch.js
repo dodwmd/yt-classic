@@ -63,6 +63,10 @@ run(async () => {
     $("#rel-list").append(row);
   }
   markWatched();
+  const cm = $("#cm-open"); // comments load only once opened: no API cost, no code, until then
+  if (v.commentCount) cm.textContent += ` (${Number(v.commentCount).toLocaleString("en-US")})`;
+  const fail = $("#cm-fail");
+  cm.onclick = () => import("./comments.js").then((m) => (fail.textContent = "", m.toggleComments(v.id, cm)), () => (fail.textContent = "Couldn't load comments. Try again."));
   const { watchLater } = await api(`/api/playlists/membership?ids=${v.id}`).catch(() => ({}));
   if (watchLater) { // unknown: no button rather than a wrong one
     const [btn, msg] = laterButton(v.id, watchLater.includes(v.id), v.title, ["Watch later", "\u2713 In Watch later"]);

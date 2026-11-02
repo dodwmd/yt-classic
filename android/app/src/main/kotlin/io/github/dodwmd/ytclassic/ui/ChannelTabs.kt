@@ -66,6 +66,7 @@ class PagedList<T>(
     private val scope: CoroutineScope,
     val idOf: (T) -> String,
     initial: PageState<T> = PageState(),
+    private val label: String = "channel tab",
     private val fetch: suspend (String?) -> Chunk<T>,
 ) {
     var state by mutableStateOf(initial)
@@ -75,7 +76,7 @@ class PagedList<T>(
         if (state.loading) return
         state = state.begin()
         val running = state
-        scope.launch { state = running.advance(idOf, { Log.e("YtClassic", "channel tab load failed", it) }, fetch) }
+        scope.launch { state = running.advance(idOf, { Log.e("YtClassic", "$label load failed", it) }, fetch) }
     }
 }
 

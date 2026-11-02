@@ -8,6 +8,8 @@ export const CODES = [
   "private",
   "removed",
   "members-only",
+  "comments-disabled",
+  "stale-page",
   "live",
   "upcoming",
   "bot-check",
@@ -31,6 +33,8 @@ export const INFO: Record<ErrorCode, Info> = {
   private: { status: 404, message: "This video is private.", retryable: false },
   removed: { status: 404, message: "This video was removed or is no longer available.", retryable: false },
   "members-only": { status: 403, message: "This video is only for channel members.", retryable: false },
+  "comments-disabled": { status: 403, message: "Comments are turned off for this video.", retryable: false },
+  "stale-page": { status: 400, message: "That page of results is no longer valid. Reload and try again.", retryable: true },
   live: { status: 409, message: "This is a live stream, which can't be played here.", retryable: false },
   upcoming: { status: 409, message: "This live event hasn't started yet.", retryable: false },
   "bot-check": { status: 502, message: "YouTube is asking the server to prove it isn't a bot. Try again later.", retryable: true },
@@ -91,6 +95,10 @@ const QUOTA_REASONS = /^(quotaexceeded|ratelimitexceeded|userratelimitexceeded|d
 
 /** Data API failure to code: quota reasons and 429 are rate limits, "not found" reasons are removals, the rest unknown. */
 export function classifyUpstream(status: number, reason: string): ErrorCode {
+  if (/^commentsdisabled$/i.test(reason)) return "comments-disabled";
+  if (/^invalidpagetoken$/i.test(reason)) return "stale-page";
+  if (/^forbidden$/i.test(reason)) return "private"; // the video (or its comments) is not open to this key: shown like a private video
+  if (/^processingfailure$/i.test(reason)) return "network"; // YouTube's own transient failure: retryable
   if (status === 429 || QUOTA_REASONS.test(reason)) return "rate-limited";
   if (status === 404 || /notfound$/i.test(reason)) return "removed";
   if (status === 408 || status === 504) return "network";
@@ -108,7 +116,7 @@ export function errorText(err: unknown): string {
 /** The one classification source: any thrown value to a code. */
 export function classifyError(err: unknown): ErrorCode {
   if (err instanceof BusyError) return "busy";
-  if (err instanceof QuotaError) return "rate-limited"; // our own daily budget for channel tabs
+  if (err instanceof QuotaError) return "rate-limited"; // our own daily budgets for channel tabs and comments
   if (err instanceof UpstreamError) return classifyUpstream(err.status, err.reason);
   const e = err as { code?: unknown; killed?: boolean; name?: string; message?: string; stderr?: string; cause?: { code?: unknown } } | null;
   if (e?.code === "ENOENT") return "unknown"; // the tool is missing: an operator problem, not a network one

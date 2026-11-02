@@ -32,6 +32,7 @@ function importGraph(entry, seen = new Set(), lazy = false) {
 }
 const LAZY_MODULE_GZIP_BYTES = 3 * 1024; // each on-demand module (it loads after the page works)
 const LAZY_TOTAL_GZIP_BYTES = 5 * 1024; // everything a page may still load on demand
+const lazyTotal = (entry) => (entry === "watch.js" ? 6 * 1024 : LAZY_TOTAL_GZIP_BYTES); // the watch page also has speed and comments (comments.js has its own cap below)
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 
 test("JavaScript per page stays within the size budget", () => {
@@ -54,9 +55,20 @@ test("JavaScript per page stays within the size budget", () => {
     const total = lazyOnly.reduce((n, f) => n + gz(f), 0);
     if (lazyOnly.length) console.log(`# JS ${e} loads on demand: ${lazyOnly.join(" + ")} = ${total} bytes gzipped`);
     for (const f of lazyOnly) assert.ok(gz(f) <= LAZY_MODULE_GZIP_BYTES, `${f} is a ${gz(f)}-byte lazy module`);
-    assert.ok(total <= LAZY_TOTAL_GZIP_BYTES, `${e} lazily loads ${total} bytes`);
+    assert.ok(total <= lazyTotal(e), `${e} lazily loads ${total} bytes`);
   }
   for (const f of jsFiles) assert.ok(reachable.has(f), `${f} is not used by any page`);
+});
+
+// Comments are opt-in: their code is fetched with a dynamic import() on first open, so it must stay out of every page's
+// static graph (the budget above) and stay small.
+test("the comments module is lazy: never statically imported, under 2.5 KB gzipped", () => {
+  const LAZY_MAX = 2.5 * 1024;
+  assert.match(read("js/watch.js"), /import\("\.\/comments\.js"\)/);
+  for (const f of jsFiles) assert.doesNotMatch(read(`js/${f}`), /\bfrom\s+"\.\/comments\.js"/, `${f} imports comments.js statically`);
+  const size = gz("comments.js");
+  console.log(`# JS comments.js (lazy) = ${size} bytes gzipped (max ${LAZY_MAX})`);
+  assert.ok(size < LAZY_MAX, `comments.js is ${size} bytes gzipped`);
 });
 
 test("no HTML-injection or dynamic-code sinks in the JS", () => {
@@ -90,7 +102,7 @@ test("JS never imports or fetches from another origin", () => {
 });
 
 test("every template and element a page script looks up exists in its HTML", () => {
-  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html", "tv.js": "tv.html" };
+  const pairs = { "home.js": "index.html", "results.js": "results.html", "watch.js": "watch.html", "comments.js": "watch.html", "channel.js": "channel.html", "history.js": "history.html", "playlists.js": "playlists.html", "subscriptions.js": "subscriptions.html", "tv.js": "tv.html" };
   const allHtml = htmlFiles.map(read).join("\n");
   for (const [script, page] of Object.entries(pairs)) {
     const js = read(`js/${script}`) + read("js/lib.js");

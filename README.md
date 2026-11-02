@@ -26,6 +26,21 @@ Video and metadata still come from Google/YouTube. Only the frontend is yours.
   kept in the database; page tokens must match `[A-Za-z0-9_-]{1,120}`.
   `GET /api/channel/:id/playlists`, `/playlist/:playlistId` (only playlists owned by that channel), `/shorts`, `/live`
   (all take `?pageToken=`) and `/about`.
+- **Comments** (read-only; web: a collapsed "Show comments (N)" section on the watch page, Android: a "Show comments" row on
+  the Watch screen). Nothing is requested, and on the web no comment code is downloaded, until it is opened. Top/Newest,
+  "Load more" (20 a page) and per-comment "Show N replies" (loaded on demand). Comments are shown as plain text (the API is asked for
+  `textFormat=plainText`, so nothing is stripped or decoded; control and invisible characters such as bidi overrides,
+  zero-width spaces and BOMs are removed) and links in the text are not clickable. Avatars are only passed on from
+  `yt3.ggpht.com`, `yt3.googleusercontent.com` and `*.ytimg.com`. The web page shows at most 200 comments (or replies) per list. Replying, liking and posting are not
+  available. `GET /api/video/:id/comments?order=top|new&pageToken=` and `GET /api/comments/:commentId/replies?pageToken=`
+  return `{items: [{id, author, authorChannelId?, authorThumb? (https only), text, likeCount, publishedAt, updatedAt?,
+  replyCount}], nextPageToken?}` (text at most 5000 and author at most 100 UTF-16 units; items with malformed ids are dropped;
+  the total shown on the button is the video's `commentCount`). Each page costs 1 Data API unit (`commentThreads.list` and
+  `comments.list`) and is cached for 10 minutes, first pages also in the database. Comments share a Data API budget
+  (`COMMENT_UNITS_MAX`, default 300 units a day) and an hourly request cap (`COMMENT_REQUESTS_PER_HOUR`, default 600),
+  separate from the channel tab budget; beyond either they answer 429 `rate-limited` with `Retry-After`. A video with
+  comments turned off answers `403` with code `comments-disabled`, remembered for an hour for both orders and every page (also across restarts), so asking again costs no units and no hourly request slot; page tokens
+  must match `[A-Za-z0-9_-]{1,120}`, video ids 11 characters, comment ids `[A-Za-z0-9_-]{16,80}`.
 - **Subscriptions home page**: merged feed of your subscribed channels (from their RSS feeds, no API quota), with
   view counts, "Load more" paging and filters (channel, hide watched, hide Shorts, hide live); see [Feed controls](#feed-controls).
 - **Import and export subscriptions**: bring your YouTube subscriptions over in one step (page `/subscriptions`, or
@@ -251,6 +266,8 @@ Streams answer with this JSON when they fail before the first byte; a mid-stream
 | `removed` | 404 | no | deleted, terminated or otherwise unavailable |
 | `live` | 409 | no | live stream (not playable here) |
 | `upcoming` | 409 | no | live event or premiere not started |
+| `stale-page` | 400 | yes | the Data API rejected a page token (`invalidPageToken`): start the list again |
+| `comments-disabled` | 403 | no | the video's comments are turned off (comment routes only; the video still plays, so it is not skippable) |
 | `bot-check` | 502 | yes | YouTube asks the server to prove it is not a bot |
 | `rate-limited` | 429 | yes | HTTP 429 or Data API quota (`quotaExceeded`, `rateLimitExceeded`, ...); `Retry-After: 60` |
 | `network` | 502 | yes | timeouts, DNS, connection resets |
@@ -272,8 +289,8 @@ private) or a recent yt-dlp failure already says the video cannot be played; the
 instead of a dead player, and a player error on the web page fetches the stream's JSON error to show the real cause.
 
 Two quotas, one story: `src/quota.ts` only *counts* Data API units actually spent today (every request, persisted, shown in
-metrics and `/api/status`), while `src/tabquota.ts` is the *budget* for the channel tab routes (`TAB_UNITS_MAX`,
-`TAB_REQUESTS_PER_HOUR`). When that budget is used up the tab routes answer a classified `rate-limited` 429 with the
+metrics and `/api/status`), while `src/tabquota.ts` and `src/commentquota.ts` are the *budgets* for the channel tab routes
+(`TAB_UNITS_MAX`, `TAB_REQUESTS_PER_HOUR`) and the comment routes (`COMMENT_UNITS_MAX`, `COMMENT_REQUESTS_PER_HOUR`). When a budget is used up its routes answer a classified `rate-limited` 429 with the
 budget's own message and a `Retry-After` until the reset, exactly like a Data API `quotaExceeded`.
 
 ### Metrics
@@ -559,6 +576,8 @@ Environment variables, read from `backend/.env` in dev and in compose:
 | `SEARCH_FALLBACK_MAX` | `20` | Daily cap on Data API searches (100 quota units each), including their follow-on pages |
 | `TAB_UNITS_MAX` | `500` | Daily Data API units the channel tab routes may use (1-2 units a fetch); more gets 429 |
 | `TAB_REQUESTS_PER_HOUR` | `1200` | Channel tab requests per hour, cached or not; more gets 429 |
+| `COMMENT_UNITS_MAX` | `300` | Daily Data API units the comment routes may use (1 per page fetched); more gets 429 |
+| `COMMENT_REQUESTS_PER_HOUR` | `600` | Comment requests per hour, cached or not; more gets 429 |
 
 The numeric settings must be whole numbers; anything else is logged and the default is used.
 

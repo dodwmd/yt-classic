@@ -5,6 +5,8 @@ import { fileURLToPath } from "node:url";
 import { PAGE_TOKEN, YT_PLAYLIST_ID, channel, channelAbout, channelKind, channelPlaylists, channelVideos, ownedPlaylist, playlistVideos, tabChannel, video, videoFacts } from "./yt/api.ts";
 import { QUALITIES, VIDEO_ID, knownUnplayable, parseLang, parseQuality, resolveUrls, streamLive, parseStart } from "./yt/dlp.ts";
 import { QuotaError, tabRequestWait } from "./tabquota.ts";
+import { commentRequestWait } from "./commentquota.ts";
+import { THREAD_ID, commentReplies, commentsKnownOff, videoComments } from "./yt/comments.ts";
 import { pingDb } from "./db.ts";
 import { CHANNEL_ID, addSub, addSubs, listSubs, removeSub } from "./store.ts";
 import { channelFeed, subscriptionFeed } from "./yt/rss.ts";
@@ -367,6 +369,26 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const id = path.slice("/api/searches/".length);
     if (!/^\d{1,12}$/.test(id)) return json(res, 400, { error: "bad id" });
     return json(res, 200, { removed: removeSearch(Number(id)) });
+  }
+
+  // Comments (read-only). Both routes share one daily unit budget and an hourly request cap (commentquota.ts); cached pages cost no units.
+  const commentsRoute = /^\/api\/video\/([^/]+)\/comments$/.exec(path) ?? /^\/api\/comments\/([^/]+)\/replies$/.exec(path);
+  if (commentsRoute && req.method === "GET") {
+    const replies = path.startsWith("/api/comments/");
+    if (replies ? !THREAD_ID.test(commentsRoute[1]) : !VIDEO_ID.test(commentsRoute[1])) return json(res, 400, { error: replies ? "bad comment id" : "bad video id" });
+    const token = param("pageToken");
+    if (token && !PAGE_TOKEN.test(token)) return json(res, 400, { error: "bad page token" });
+    const order = param("order") || "top";
+    if (order !== "top" && order !== "new") return json(res, 400, { error: "bad order" });
+    if (!replies && commentsKnownOff(commentsRoute[1])) return classified(res, "comments-disabled"); // known: no hourly slot, no units
+    const wait = commentRequestWait();
+    if (wait) return classified(res, "rate-limited", "Too many comment requests this hour. Try again later.", wait);
+    try {
+      return json(res, 200, replies ? await commentReplies(commentsRoute[1], token) : await videoComments(commentsRoute[1], order, token));
+    } catch (e) {
+      if (e instanceof QuotaError) return classified(res, "rate-limited", e.message, e.retryAfter);
+      throw e;
+    }
   }
 
   if (path.startsWith("/api/video/")) {

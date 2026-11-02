@@ -139,6 +139,14 @@ class YtApi(
 
     suspend fun channelAbout(id: String): ChannelAbout = get<ChannelAboutResponse>("api/channel/$id/about").about
 
+    /** One page of a video's comments; [order] is "top" or "new". Throws an [ApiException] with code "comments-disabled" when they are off. */
+    suspend fun comments(videoId: String, order: String, pageToken: String? = null): CommentPage =
+        get("api/video/$videoId/comments", "order" to order, "pageToken" to pageToken)
+
+    /** One page of the replies to the top-level comment [commentId]. */
+    suspend fun commentReplies(commentId: String, pageToken: String? = null): CommentPage =
+        get("api/comments/$commentId/replies", "pageToken" to pageToken)
+
     suspend fun status(): StatusResponse = get("api/status")
 
     /** The next TV video: a random one from a subscribed channel other than [after], not in [seen] (the last ~50 ids). */

@@ -19,6 +19,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +38,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
 import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.formatViews
 import io.github.dodwmd.ytclassic.data.joinParts
@@ -59,6 +63,11 @@ fun WatchScreen(
     LoadedContent(loaded) { r ->
         val v = r.video
         var expanded by remember(v.id) { mutableStateOf(false) }
+        // Comments cost nothing until opened; the open state and the sort order survive rotation, the loaded pages live in the model.
+        val comments = viewModel<CommentsModel>(key = "comments:${v.id}", factory = viewModelFactory { initializer { CommentsModel(api, v.id) } })
+        var commentsOpen by rememberSaveable(v.id) { mutableStateOf(false) }
+        var commentsOrder by rememberSaveable(v.id) { mutableStateOf("top") }
+        LaunchedEffect(commentsOpen, commentsOrder) { if (commentsOpen) comments.list(commentsOrder).loadFirst() }
         val later = rememberLater(api, (listOf(v.id) + r.related.items.map { it.id }).distinct())
         // In picture-in-picture only the player shows, so never the two-pane layout.
         val inPip = LocalPip.current.inPip
@@ -116,6 +125,8 @@ fun WatchScreen(
                             }
                         }
                     }
+                    // commentsOpen/commentsOrder are state delegates captured here, so this long-lived lambda always reads the current values.
+                    commentsSection(comments, video.commentCount?.toLongOrNull(), commentsOpen, { commentsOpen = it }, commentsOrder, { commentsOrder = it })
                     if (cur.related.items.isNotEmpty()) item { SectionTitle(cur.related.heading.ifBlank { "Related videos" }) }
                     items(cur.related.items, key = { it.id }) { RelatedRow(it, onVideoNow, thumbWidth = 140, later = laterNow) }
                 }

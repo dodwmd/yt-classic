@@ -74,6 +74,12 @@ class ErrorsTest {
     }
 
     @Test
+    fun turnedOffCommentsAreNotASkippableVideoErrorAndNeverOfferRetry() {
+        assertFalse(isSkippable("comments-disabled"), "the video still plays; only its comments are off")
+        assertFalse(errorActions("comments-disabled", retryable = false).showRetry)
+    }
+
+    @Test
     fun aHintNeverHidesThePlayerForGood() {
         assertTrue(showPlayer(playable = true, reason = null, override = false))
         for (r in skippable) {
