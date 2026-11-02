@@ -469,6 +469,25 @@ and `ANDROID_KEY_PASSWORD`; keep a backup of the keystore, because losing it mea
 
 **Speed and gestures:** the `1x` button next to the seek bar (also in fullscreen) opens a menu of 0.5x to 2x (pitch corrected); the choice is one global default kept in DataStore, also for TV. Double-tap the left or right third of the video to seek 10 s; further double taps within 0.7 s add up and the stream restarts once. TalkBack has "Rewind/Forward 10 seconds" actions on the video. Positions stay in media time at any speed.
 
+**Updates (the one place the app contacts GitHub):** Settings > Updates > *Check for updates* does one unauthenticated
+`GET https://api.github.com/repos/dodwmd/yt-classic/releases/latest`. GitHub sees your IP address and the request's
+`User-Agent: yt-classic-android`; nothing else identifying is sent. The request uses its own HTTP client (8 s timeout, no
+interceptors, authenticator or cookie jar, and redirects are not followed, so a redirect to http is an error rather than
+a downgrade), and the server's access token never goes to it. `UpdateTest` proves this: it asserts the client has none of
+those and that a request made with it carries no `Authorization` or `Cookie` header. It compares the release tag
+(`v0.1.0-N`) with the installed `versionName` + CI run number (`versionCode`; a tag without a run number counts as build 0;
+a pre-release tag such as `-rc1` is ignored), and shows "You're up to date" or "Version X is available" with the first 500
+characters of the release notes as plain text (control and bidi characters removed) and an *Open release page* button. The
+page URL is built only from the fixed repo path and the release's tag string once it has matched `vN.N.N-N`, never from a
+URL in the response. Rate limiting (403/429), other errors, malformed answers and being offline give a message instead of an
+error. Nothing is checked in the background unless you switch on *Check weekly when the app starts* (off by default): then
+at most one check every 7 days, and a note with View/Dismiss appears on Home when a newer version exists. The app does not
+install anything itself.
+
+**Layouts:** on windows at least 600dp wide, or in landscape at least 480dp wide (narrower split-screen windows and picture-in-picture keep one column), the watch screen has two panes: the player (with its own scroll
+when the window is short) on the left, details and related videos on the right. Portrait phones keep the single column;
+fullscreen is unchanged. Likes are shown next to the views (hidden when YouTube hides the count; the web watch page too).
+
 **Fullscreen:** the corner-brackets button next to the seek bar plays the video fullscreen and hides the system bars. On
 phones it also switches to landscape; Android 16+ ignores orientation requests on large screens (smallest width of
 600dp or more) and in multi-window, so there only the bars are hidden. Tap the video to hide the controls, Back to leave.
@@ -514,7 +533,10 @@ adb shell am start -n io.github.dodwmd.ytclassic/.MainActivity --es server 10.0.
 ```
 
 `10.0.2.2` is the host machine as seen from the emulator. `./gradlew :app:testDebugUnitTest :app:lintDebug` runs
-the unit tests (API parsing against real captured responses, formatters, seek logic) and Android lint.
+the unit tests (API parsing against real captured responses, formatters, seek logic, the update check, layout rules) and
+Android lint. There are no instrumented (Compose UI) tests: CI has no emulator, so they could not run there; the UI logic
+that can fail (layout choice, version comparison, formatting) is kept in pure functions covered by the JVM tests, and
+screens are checked by hand on an emulator.
 
 **Note on the SDK:** the newest Android libraries need `compileSdk` 37, which this nixpkgs snapshot doesn't ship yet,
 so `android/shell.nix` adds platform 37 from Google as a hash-pinned download. Once nixpkgs has it, that block can go.

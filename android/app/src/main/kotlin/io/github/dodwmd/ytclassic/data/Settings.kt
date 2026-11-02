@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import io.github.dodwmd.ytclassic.player.clampSpeed
@@ -16,6 +17,8 @@ private val ACCESS_TOKEN = stringPreferencesKey("access_token")
 private val PLAYBACK_SPEED = floatPreferencesKey("playback_speed")
 private val BACKGROUND_AUDIO = booleanPreferencesKey("background_audio")
 private val PICTURE_IN_PICTURE = booleanPreferencesKey("picture_in_picture")
+private val AUTO_UPDATE_CHECK = booleanPreferencesKey("auto_update_check")
+private val LAST_UPDATE_CHECK = longPreferencesKey("last_update_check")
 
 /** Persists the backend address, e.g. "192.168.1.153:8080" (home Wi-Fi) or a VPN host name, and playback options. */
 class SettingsStore(private val context: Context) {
@@ -59,5 +62,19 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setPlaybackSpeed(speed: Float) {
         context.dataStore.edit { it[PLAYBACK_SPEED] = clampSpeed(speed) }
+    }
+
+    /** Check GitHub for a new release once a week when the app starts. Off by default: the check contacts GitHub. */
+    val autoUpdateCheck: Flow<Boolean> = context.dataStore.data.map { it[AUTO_UPDATE_CHECK] ?: false }
+
+    suspend fun setAutoUpdateCheck(on: Boolean) {
+        context.dataStore.edit { it[AUTO_UPDATE_CHECK] = on }
+    }
+
+    /** When the last update check ran (epoch ms), 0 if never. */
+    val lastUpdateCheck: Flow<Long> = context.dataStore.data.map { it[LAST_UPDATE_CHECK] ?: 0L }
+
+    suspend fun setLastUpdateCheck(ms: Long) {
+        context.dataStore.edit { it[LAST_UPDATE_CHECK] = ms }
     }
 }

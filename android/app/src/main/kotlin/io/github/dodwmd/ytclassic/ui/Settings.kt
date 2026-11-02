@@ -159,6 +159,7 @@ fun SettingsScreen(app: App, onDone: () -> Unit, onStatus: () -> Unit) {
             Switch(checked = pip && pipSupported, enabled = pipSupported, onCheckedChange = null)
         }
         SubscriptionsSection(app.api)
+        UpdateSection(app)
         Text("Server health", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
         Text("yt-dlp version, the last successful and failed playback lookups, and storage.", color = Muted)
         OutlinedButton(onClick = onStatus) { Text("Status") }

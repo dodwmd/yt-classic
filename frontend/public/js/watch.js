@@ -51,7 +51,7 @@ run(async () => {
   $("#chan").textContent = v.channelTitle;
   $("#chan").href = channelHref(v.channelId);
   $("#age").textContent = timeAgo(v.publishedAt);
-  $("#views").textContent = formatViews(v.views);
+  $("#views").textContent = join(formatViews(v.views), /^\d+$/.test(v.likes) && `${Number(v.likes).toLocaleString("en-US")} like${v.likes === "1" ? "" : "s"}`);
   $("#desc").textContent = v.description;
 
   $("#rel-heading").textContent = related.heading;
