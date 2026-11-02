@@ -187,6 +187,14 @@ data class MembershipResponse(val watchLater: List<String> = emptyList(), val an
 @Serializable
 data class OkReply(val removed: Boolean = false, val moved: Boolean = false)
 
+/** `GET /api/video/:id/qualities`: the tiers this video really has, with the codec families per tier. */
+@Serializable
+data class QualitiesResponse(
+    val qualities: List<Int> = emptyList(),
+    val codecs: Map<String, List<String>> = emptyMap(),
+    val tiersKnown: Boolean = false,
+)
+
 @Serializable
 data class VideoResponse(
     val video: VideoDetail,
@@ -197,6 +205,8 @@ data class VideoResponse(
     val qualities: List<Int> = listOf(360, 480, 720, 1080),
     /** Per tier (as a string key), the codec families the video has there: "avc1", "vp9", "av1". Empty when unknown. */
     val codecs: Map<String, List<String>> = emptyMap(),
+    /** False when [qualities] is only the usual list because the server has not looked at this video's formats yet. */
+    val tiersKnown: Boolean = true,
     val lang: String = "",
     val progress: Progress? = null,
     /** False only when the server already knows the video can't be played; [reason] is the error code, [message] the explanation. */

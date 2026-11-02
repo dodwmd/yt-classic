@@ -47,6 +47,10 @@ import io.github.dodwmd.ytclassic.ui.classicSliderColors
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.runtime.SideEffect
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -104,6 +108,8 @@ fun StreamPlayer(
     onSkip: (() -> Unit)? = null,
     onStop: (() -> Unit)? = null,
     initialAuto: Boolean = false,
+    /** The display's shorter side in px, as the plan used it: Auto picks the tallest chip that fits. */
+    screenHeight: Int = 1080,
 ) {
     val app = LocalContext.current.applicationContext as App
     val host = app.host
@@ -304,23 +310,33 @@ fun StreamPlayer(
             }
             transport()
             // Scrolls sideways when the tiers (up to 2160p, and Auto) do not fit a narrow screen.
+            val chips = qualities.filter { it <= host.ceiling } // a tier this device failed to decode is gone for this video
+            SideEffect { host.chips = chips }
+            val shown = chipFor(chips, quality) // the video may lack the exact tier that was asked for
             Row(
                 Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                for (q in qualities) {
-                    FilterChip(selected = !host.auto && q == quality, onClick = { host.chooseQuality(q, false) }, label = { Text("${q}p") })
-                }
-                if (qualities.size > 1) {
-                    val screen = screenShortSide(LocalContext.current)
-                    FilterChip(
-                        selected = host.auto, onClick = { host.chooseQuality(autoTier(qualities, screen), true) },
-                        label = { Text(if (host.auto) "Auto ${quality}p" else "Auto") },
-                    )
+                for (q in chips) QualityChip("${q}p", !host.auto && q == shown, null) { host.chooseQuality(q, false) }
+                if (chips.size > 1) {
+                    val label = if (host.auto) "Auto ${shown}p" else "Auto (max for screen)"
+                    QualityChip(label, host.auto, if (host.auto) "Automatic, ${shown}p" else "Off") { host.chooseQuality(autoTier(chips, screenHeight), true) }
                 }
             }
+            host.qualityNotice?.let { Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(horizontal = 12.dp).semantics { liveRegion = LiveRegionMode.Polite }) }
         }
     }
+}
+
+/** One quality chip; the selected one scrolls into view in the row, and [state] is what TalkBack reads after the label. */
+@Composable
+private fun QualityChip(label: String, selected: Boolean, state: String?, onClick: () -> Unit) {
+    val requester = remember { BringIntoViewRequester() }
+    LaunchedEffect(selected) { if (selected) requester.bringIntoView() }
+    FilterChip(
+        selected = selected, onClick = onClick, label = { Text(label) },
+        modifier = Modifier.bringIntoViewRequester(requester).then(if (state != null) Modifier.semantics { stateDescription = state } else Modifier),
+    )
 }
 
 /** "-10" / "+10" (running total) on the side that was double tapped, with a fading ripple unless animations are off. */

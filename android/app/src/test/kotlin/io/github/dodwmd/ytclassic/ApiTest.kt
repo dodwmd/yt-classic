@@ -51,6 +51,7 @@ class ApiTest {
                 path == "/api/searches" && ex.requestMethod == "GET" -> 200 to fixture("searches")
                 path == "/api/searches" && ex.requestMethod == "DELETE" -> 200 to """{"removed":1}"""
                 path.startsWith("/api/searches/") && ex.requestMethod == "DELETE" -> 200 to """{"removed":true}"""
+                path == "/api/video/dQw4w9WgXcQ/qualities" -> 200 to """{"qualities":[720,1080,2160],"codecs":{"720":["avc1"],"1080":["avc1"],"2160":["vp9"]},"tiersKnown":true}"""
                 path == "/api/video/dQw4w9WgXcQ" && "q=auto" in ex.requestURI.query.orEmpty() -> 200 to fixture("video-4k")
                 path == "/api/video/dQw4w9WgXcQ" -> 200 to fixture("video")
                 path == "/api/video/private0001" -> 404 to """{"error":"This video is private.","code":"private","retryable":false}"""
@@ -196,6 +197,15 @@ class ApiTest {
         assertEquals("GET /api/video/dQw4w9WgXcQ?q=2160&codecs=avc1%2Cvp9", requests.last())
         api.video("dQw4w9WgXcQ")
         assertEquals("GET /api/video/dQw4w9WgXcQ", requests.last())
+    }
+
+    @Test
+    fun videoQualitiesAsksSeparatelyWithTheSameCapabilities() = runBlocking {
+        val q = api.videoQualities("dQw4w9WgXcQ", 0, 1440, "avc1,vp9", lang = "pt")
+        assertEquals("GET /api/video/dQw4w9WgXcQ/qualities?q=auto&maxh=1440&codecs=avc1%2Cvp9&a=pt", requests.last())
+        assertEquals(listOf(720, 1080, 2160), q.qualities)
+        assertEquals(listOf("vp9"), q.codecs["2160"])
+        assertTrue(q.tiersKnown)
     }
 
     @Test

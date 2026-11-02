@@ -32,7 +32,7 @@ const val TV_BACKGROUND_MESSAGE = "TV stopped when the app left the screen (back
 const val TV_REMOVED_MESSAGE = "TV stopped because the app was closed."
 
 /** A video the server picked, with the quality it suggests. */
-data class TvPick(val video: VideoDetail, val channelId: String, val quality: Int)
+data class TvPick(val video: VideoDetail, val channelId: String, val quality: Int, val auto: Boolean = false)
 
 /** Why a request for the next video failed. */
 sealed interface TvFailure {

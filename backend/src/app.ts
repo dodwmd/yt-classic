@@ -1,3 +1,4 @@
+import { envInt } from "./env.ts";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, join, normalize } from "node:path";
@@ -39,8 +40,8 @@ const TYPES: Record<string, string> = {
 
 /** Test seam: replaced by the tests to reset the request limit. */
 export let tvLimiter = new TvLimiter();
-/** How long /api/video waits for the prewarm resolve, which also tells it the video's tiers. */
-const OFFER_WAIT_MS = 4000;
+/** How long /api/video/:id/qualities waits for the resolve that tells it the video's tiers. */
+const offerWaitMs = () => envInt("OFFER_WAIT_MS", 4000); // env only so tests need not wait 4 s
 
 export function resetTvLimiter(): void {
   tvLimiter = new TvLimiter();
@@ -394,6 +395,28 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     }
   }
 
+  const qualitiesRoute = /^\/api\/video\/([^/]+)\/qualities$/.exec(path);
+  if (qualitiesRoute) {
+    // Which tiers (and codecs) the video has. Shares the resolve that /api/video prewarmed, waiting for it up to 4 s.
+    if (!sameOrigin(req)) return json(res, 403, { error: "cross-origin request refused" });
+    if (req.method !== "GET") return json(res, 405, { error: "method not allowed" }, { allow: "GET" });
+    const id = qualitiesRoute[1];
+    if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
+    const { quality, codecs } = requestedQuality(url.searchParams);
+    const known = knownOffered(id);
+    if (!known && !knownUnplayable(id)) {
+      let timer: NodeJS.Timeout | undefined;
+      let leave = () => {};
+      const stop = new Promise<void>((r) => (leave = r));
+      res.once("close", leave); // the viewer left: stop waiting (the resolve itself is shared and carries on)
+      await Promise.race([resolveUrls(id, quality, parseLang(url.searchParams.get("a")), codecs).catch(() => {}), stop, new Promise((r) => (timer = setTimeout(r, offerWaitMs())))]);
+      clearTimeout(timer);
+      if (res.destroyed) return;
+    }
+    const offered = known ?? knownOffered(id);
+    return json(res, 200, { qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered });
+  }
+
   if (path.startsWith("/api/video/")) {
     const id = path.slice("/api/video/".length);
     if (!VIDEO_ID.test(id)) return json(res, 400, { error: "bad video id" });
@@ -402,22 +425,15 @@ async function handle(req: IncomingMessage, res: ServerResponse, gate: ReturnTyp
     const { quality, auto, codecs } = requestedQuality(url.searchParams);
     const a = url.searchParams.get("a");
     const lang = parseLang(a);
-    // Prewarm so the stream starts without waiting for yt-dlp. The same run reports which tiers the video has, so
-    // wait a little for it (unless the video is already known to be unplayable); on a timeout the usual tiers are offered.
-    const prewarm = resolveUrls(id, quality, lang, codecs).catch(() => {});
-    if (!(v.unplayable ?? knownUnplayable(id))) {
-      let timer: NodeJS.Timeout | undefined;
-      await Promise.race([prewarm, new Promise((r) => (timer = setTimeout(r, OFFER_WAIT_MS)))]);
-      clearTimeout(timer);
-    }
-    const offered = knownOffered(id);
+    resolveUrls(id, quality, lang, codecs).catch(() => {}); // prewarm so the stream starts without waiting for yt-dlp
+    const offered = knownOffered(id); // only when an earlier resolve already learned them; GET /api/video/:id/qualities waits for the rest
     refreshMeta({ id: v.id, title: v.title, channelId: v.channelId, channelTitle: v.channelTitle, thumb: v.thumb, durationSeconds: v.durationSeconds ?? 0 });
     const related = await relatedFor(v);
     const progress = getProgress(id) ?? undefined; // omitted when nothing is known
     // Playability hint, only when something already says it can't be played (Data API metadata or a recent yt-dlp failure).
     const reason = v.unplayable ?? knownUnplayable(id);
     const hint = reason ? { playable: false, reason, message: INFO[reason].message } : {};
-    return json(res, 200, { video: v, related, quality, auto, qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, lang: a && lang === a ? a : "", progress, ...hint });
+    return json(res, 200, { video: v, related, quality, auto, qualities: offered?.qualities ?? baseQualities(), codecs: offered?.codecs ?? {}, tiersKnown: !!offered, lang: a && lang === a ? a : "", progress, ...hint });
   }
 
   if (path === "/api/history" && req.method === "GET") {

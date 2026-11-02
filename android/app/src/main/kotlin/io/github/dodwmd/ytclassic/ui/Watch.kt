@@ -52,6 +52,12 @@ import io.github.dodwmd.ytclassic.player.screenShortSide
 import androidx.compose.ui.platform.LocalContext
 import io.github.dodwmd.ytclassic.App
 import kotlinx.coroutines.flow.first
+import io.github.dodwmd.ytclassic.player.withOffers
+import io.github.dodwmd.ytclassic.player.AUTO_QUALITY
+import io.github.dodwmd.ytclassic.data.QualitiesResponse
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
 import io.github.dodwmd.ytclassic.player.resumeStart
 
 @Composable
@@ -69,8 +75,8 @@ fun WatchScreen(
     // chips and the starting tier come from the answer plus what this device can decode.
     val loaded = rememberLoad(id) {
         val pref = app.settings.qualityPref.first()
-        val decoders = app.host.decoders
-        val screen = screenShortSide(app)
+        val decoders = withContext(Dispatchers.Default) { app.host.decoders } // normally already warm (App starts it)
+        val screen = minOf(screenShortSide(app), decoders.best)
         val response = api.video(id, pref, screen, decoders.codecsParam)
         response to qualityPlan(response, pref, decoders, screen)
     }
@@ -96,7 +102,21 @@ fun WatchScreen(
         // PiP): recreating StreamPlayer would stop and restart playback, and the list would lose its scroll.
         // The movable lambdas outlive recompositions, so they read the latest values through these.
         val latest by rememberUpdatedState(r)
-        val planNow by rememberUpdatedState(plan)
+        // The page data carries the usual tiers; the ones this video really has arrive separately and only change the chips.
+        var offers by remember(v.id) { mutableStateOf<QualitiesResponse?>(null) }
+        LaunchedEffect(v.id) {
+            if (!r.tiersKnown) {
+                offers = try {
+                    api.videoQualities(v.id, if (plan.auto) AUTO_QUALITY else plan.quality, plan.screen, app.host.decoders.codecsParam)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null // the usual chips stay
+                }
+            }
+        }
+        val shownPlan = offers?.takeIf { it.tiersKnown }?.let { withOffers(plan, it.qualities, it.codecs, app.host.decoders) } ?: plan
+        val planNow by rememberUpdatedState(shownPlan)
         val fullscreenNow by rememberUpdatedState(fullscreen)
         val onFullscreenNow by rememberUpdatedState(onFullscreen)
         val onVideoNow by rememberUpdatedState(onVideo)
@@ -111,7 +131,7 @@ fun WatchScreen(
                 if (showPlayer(cur.playable, cur.reason, override)) {
                     StreamPlayer(
                         cur.video, planNow.quality, planNow.chips, cur.lang, begin, onPosition = { resume[0] = it },
-                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto,
+                        fullscreen = fullscreenNow, onFullscreen = { onFullscreenNow(it) }, initialAuto = planNow.auto, screenHeight = planNow.screen,
                     )
                 } else {
                     Column(Modifier.padding(12.dp).semantics { liveRegion = LiveRegionMode.Polite }) {

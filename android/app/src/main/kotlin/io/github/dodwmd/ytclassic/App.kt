@@ -12,6 +12,7 @@ import io.github.dodwmd.ytclassic.data.installedVersion
 import kotlinx.coroutines.flow.MutableStateFlow
 import io.github.dodwmd.ytclassic.player.PlaybackHost
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
@@ -48,6 +49,7 @@ class App : Application() {
         api = YtApi(server = { settings.serverUrl.first() }, token = { settings.accessToken.first() })
         host = PlaybackHost(this, api, settings)
         homeFeed = HomeFeed(api, MainScope())
+        MainScope().launch(Dispatchers.Default) { host.decoders } // the decoder query takes a moment: have it ready before the first video
         MainScope().launch {
             val now = System.currentTimeMillis()
             if (autoCheckDue(settings.autoUpdateCheck.first(), settings.lastUpdateCheck.first(), now)) {

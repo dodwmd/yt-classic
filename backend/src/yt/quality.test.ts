@@ -19,12 +19,13 @@ test("parseQuality: bounds, new tiers and the MAX_QUALITY cap", () => {
   for (const q of [360, 480, 720, 1080, 1440, 2160]) assert.equal(parseQuality(String(q)), q);
   for (const bad of ["999", "0", "-720", "4320", "abc", "", "auto", null]) assert.equal(parseQuality(bad), 720, String(bad));
   withEnv("MAX_QUALITY", "1080", () => {
-    assert.equal(parseQuality("2160"), 720, "above the owner's cap falls back to the default");
+    assert.equal(parseQuality("2160"), 1080, "above the owner's cap is lowered to it");
     assert.equal(parseQuality("1080"), 1080);
     assert.deepEqual(baseQualities(), [360, 480, 720, 1080]);
   });
   withEnv("MAX_QUALITY", "480", () => {
     assert.equal(parseQuality("720"), 480, "a cap below the default clamps the default too");
+    assert.equal(parseQuality("bogus"), 480);
     assert.deepEqual(baseQualities(), [360, 480]);
   });
   assert.deepEqual(baseQualities(), [360, 480, 720, 1080]);
@@ -47,29 +48,59 @@ test("autoQuality: screen height, decoders and what the video has", () => {
   assert.equal(autoQuality("720", all), 720);
   assert.equal(autoQuality("100", all), 360, "never below the lowest tier");
   assert.equal(autoQuality("junk", all), 1080);
-  assert.equal(autoQuality("2160", all, [360, 720]), 720, "the video's own highest tier under the cap");
-  assert.equal(autoQuality("2160", all, [1080, 2160]), 2160);
   withEnv("MAX_QUALITY", "1440", () => assert.equal(autoQuality("2160", all), 1440));
   assert.equal(requestedQuality(new URLSearchParams("q=auto&maxh=1440&codecs=avc1,vp9")).quality, 1440);
   assert.equal(requestedQuality(new URLSearchParams("q=auto&maxh=1440&codecs=avc1")).quality, 1080);
   assert.equal(requestedQuality(new URLSearchParams("q=1440")).auto, false);
 });
 
-test("formatSelector: unchanged up to 1080p, VP9 then AV1 above, only decodable codecs", () => {
-  const old = (q: number) => `bv*[height<=${q}][vcodec^=avc1]+ba[ext=m4a][language^=en]/bv*[height<=${q}][ext=mp4]+ba[ext=m4a][language^=en]/bv*[height<=${q}][vcodec^=avc1]+ba[ext=m4a]/bv*[height<=${q}][ext=mp4]+ba[ext=m4a]/b[height<=${q}][ext=mp4]/bv*[height<=${q}]+ba/b[height<=${q}]`;
-  for (const q of [360, 480, 720, 1080]) assert.equal(formatSelector(q, "en"), old(q), `${q}p is what it always was`);
-  assert.equal(formatSelector(1080, "en", ["avc1"]), old(1080));
+test("formatSelector: H.264 first up to 1080p, VP9 then AV1 above, only decodable codecs, SDR 8-bit, both orientations", () => {
+  for (const q of [360, 480, 720, 1080]) {
+    const sel = formatSelector(q, "en");
+    assert.ok(sel.startsWith(`bv*[aspect_ratio>=?1][height<=${q}][vcodec^=avc1]+ba[ext=m4a][language^=en]/`), sel);
+    assert.ok(sel.includes(`bv*[aspect_ratio<1][width<=${q}][vcodec^=avc1]`), "portrait clips are bounded by width");
+    assert.ok(!sel.includes("vcodec~="), `${q}p never asks for VP9/AV1`);
+  }
+  assert.equal(formatSelector(1080, "en", ["avc1"]), formatSelector(1080, "en"));
   const hi = formatSelector(2160, "pt");
-  assert.ok(hi.startsWith("bv*[height<=2160][height>1080][vcodec~='^vp0?9'][protocol!*=m3u8]+ba[ext=m4a][language^=pt]/"), hi);
+  assert.ok(hi.startsWith("bv*[aspect_ratio>=?1][height<=2160][height>1080][vcodec~='^vp0?9']"), hi);
+  assert.ok(hi.includes("[language^=pt]"));
   assert.ok(hi.indexOf("vcodec~='^vp0?9'") < hi.indexOf("vcodec~='^av01'"), "VP9 before AV1");
   assert.ok(hi.indexOf("vcodec~='^av01'") < hi.indexOf("[vcodec^=avc1]"), "H.264 is the fallback");
-  assert.ok(hi.includes("[height<=2160][height>1080][vcodec~='^vp0?9'][protocol!*=m3u8]+ba/"), "any audio (Opus) as a last resort");
+  assert.ok(hi.includes("[protocol!*=m3u8]+ba/"), "any audio (Opus) as a last resort");
+  assert.ok(hi.includes("[dynamic_range!*=?HDR]") && hi.includes("vp09\\.0[23]"), "no HDR or 10-bit above 1080p");
+  assert.ok(hi.includes("[aspect_ratio<1][width<=2160][width>1080]"), "portrait 4K is bounded by width");
   assert.ok(formatSelector(1440, "en").includes("height<=1440][height>1080]"));
   const onlyVp9 = formatSelector(2160, "en", ["avc1", "vp9"]);
-  assert.ok(!onlyVp9.includes("^av01'][protocol") && onlyVp9.includes("[vcodec!~='^av01']"), onlyVp9);
+  assert.ok(!onlyVp9.includes("vcodec~='^av01'") && onlyVp9.includes("[vcodec!~='^av01']"), onlyVp9);
   const onlyAv1 = formatSelector(2160, "en", ["avc1", "av01"]);
   assert.ok(!onlyAv1.includes("vcodec~='^vp0?9'") && onlyAv1.includes("[vcodec!~='^vp0?9']"), onlyAv1);
-  assert.equal(formatSelector(2160, "en", ["avc1"]), old(1080), "no VP9/AV1 decoder: capped at 1080p");
+  assert.equal(formatSelector(2160, "en", ["avc1"]), formatSelector(1080, "en"), "no VP9/AV1 decoder: capped at 1080p");
+});
+
+// The real yt-dlp format engine on crafted format lists (no network): HDR/10-bit and portrait streams.
+const ytdlp = spawnSync("yt-dlp", ["--version"], { stdio: "ignore" }).status === 0;
+test("formatSelector against yt-dlp's own selection: SDR picked over HDR, portrait bounded by width", { skip: !ytdlp && "yt-dlp not installed" }, () => {
+  const tmp = mkdtempSync(join(tmpdir(), "yt-sel-"));
+  try {
+    const f = (id: string, w: number, h: number, vcodec: string, dr = "SDR", ext = "mp4") => ({ format_id: id, width: w, height: h, vcodec, acodec: "none", ext, protocol: "https", url: `https://v.invalid/${id}`, aspect_ratio: Math.round((w / h) * 100) / 100, dynamic_range: dr, vbr: h });
+    const audio = { format_id: "140", vcodec: "none", acodec: "mp4a.40.2", ext: "m4a", protocol: "https", url: "https://a.invalid/140", abr: 128, language: "en" };
+    const pick = (formats: object[], q: number, codecs: readonly ("avc1" | "vp9" | "av01")[]) => {
+      const file = join(tmp, "i.json");
+      writeFileSync(file, JSON.stringify({ id: "x", title: "t", _type: "video", extractor: "generic", webpage_url: "https://x.invalid/", formats: [...formats, audio] }));
+      return JSON.parse(execFileSync("yt-dlp", ["--load-info-json", file, "-f", formatSelector(q, "en", codecs), "--print", "%(requested_formats.:.format_id)j"], { encoding: "utf8" }).trim());
+    };
+    const land = [f("l720", 1280, 720, "avc1.4d401f"), f("l1080", 1920, 1080, "avc1.640028"), f("hdr", 3840, 2160, "vp09.02.51.10", "HDR10", "webm"), f("vp9", 3840, 2160, "vp9", "SDR", "webm"), f("av1ten", 3840, 2160, "av01.0.13M.10")];
+    assert.deepEqual(pick(land, 2160, ["avc1", "vp9", "av01"]), ["vp9", "140"], "the SDR 8-bit stream, not the HDR one");
+    assert.deepEqual(pick(land.filter((x) => x.format_id !== "vp9"), 2160, ["avc1", "vp9", "av01"]), ["l1080", "140"], "only HDR/10-bit above 1080p: stay on H.264");
+    assert.deepEqual(pick(land, 720, ["avc1"]), ["l720", "140"]);
+    const port = [f("p360", 360, 640, "avc1.4d401e"), f("p720", 720, 1280, "avc1.4d401f"), f("p1080", 1080, 1920, "avc1.640028"), f("p2160", 2160, 3840, "vp9", "SDR", "webm")];
+    assert.deepEqual(pick(port, 720, ["avc1"]), ["p720", "140"], "q=720 on a vertical clip is the 720x1280 stream, not 360x640");
+    assert.deepEqual(pick(port, 1080, ["avc1", "vp9"]), ["p1080", "140"]);
+    assert.deepEqual(pick(port, 2160, ["avc1", "vp9"]), ["p2160", "140"]);
+  } finally {
+    rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 test("offeredFrom real-shaped format lists", () => {
@@ -86,6 +117,10 @@ test("offeredFrom real-shaped format lists", () => {
   assert.deepEqual(vp9Only4k, { qualities: [1080, 2160], codecs: { "1080": ["vp9"], "2160": ["vp9"] } });
   const av1Only = offeredFrom([{ height: 1440, vcodec: "av01.0.12M.08", protocol: "https" }]);
   assert.deepEqual(av1Only.codecs, { "1440": ["av1"] });
+  const hdr = offeredFrom([{ height: 2160, width: 3840, vcodec: "vp09.02.51.10", protocol: "https", dynamic_range: "HDR10" }, { height: 2160, width: 3840, vcodec: "vp09.02.51.10", protocol: "https", dynamic_range: "SDR" }, { height: 1440, width: 2560, vcodec: "av01.0.12M.10", protocol: "https" }, { height: 1080, width: 1920, vcodec: "avc1.640028", protocol: "https" }]);
+  assert.deepEqual(hdr.qualities, [1080], "HDR and 10-bit streams are not offered");
+  const portrait = offeredFrom([{ height: 1920, width: 1080, vcodec: "avc1.640028", protocol: "https" }, { height: 640, width: 360, vcodec: "avc1.4d401e", protocol: "https" }, { height: 3840, width: 2160, vcodec: "vp9", protocol: "https" }]);
+  assert.deepEqual(portrait.qualities, [360, 1080, 2160], "a 1080x1920 clip is 1080p, not 2160");
   const wide = offeredFrom([{ height: 816, vcodec: "avc1.640028", protocol: "https" }]); // a 1080p-class 2.35:1 video
   assert.deepEqual(wide.qualities, [1080]);
   assert.deepEqual(offeredFrom([{ height: 720, vcodec: "avc1", protocol: "m3u8_native" }, { height: "x" }, {}]).qualities, []);
@@ -107,6 +142,12 @@ test("resolveUrls asks yt-dlp for the selector and the format list in one run, a
     assert.ok(args.includes("-g"));
     assert.deepEqual(knownOffered("QQQQQQQQQQQ")?.qualities, [720, 2160]);
     assert.equal(knownOffered("RRRRRRRRRRR"), undefined);
+    // H.264-only clients asking for 4K share the 1080p entry: no second yt-dlp run.
+    writeFileSync(argsFile, "");
+    await resolveUrls("SSSSSSSSSSS", 1080, "en");
+    const before = readFileSync(argsFile, "utf8");
+    await resolveUrls("SSSSSSSSSSS", 2160, "en", ["avc1"]);
+    assert.equal(readFileSync(argsFile, "utf8"), before, "served from the 1080p cache entry");
   } finally {
     if (saved === undefined) delete process.env.YTDLP_BIN; else process.env.YTDLP_BIN = saved;
     rmSync(tmp, { recursive: true, force: true });
@@ -145,10 +186,18 @@ function remuxSmoke(vcodecArgs: string[], expectVideo: string, expectTag: string
   }
 }
 
-test("remux -c copy: VP9 + Opus (webm) into fragmented mp4", { skip: !/libvpx-vp9/.test(encoders) || !/libopus/.test(encoders) && "ffmpeg without libvpx-vp9/libopus" }, () => {
+// Locally a machine without these encoders skips the remux tests; in CI (the workflow installs ffmpeg) they must run.
+const need = (ok: boolean, why: string) => (ok ? false : process.env.CI ? false : why);
+test("remux tests have what they need in CI", { skip: !process.env.CI && "only enforced in CI" }, () => {
+  assert.match(encoders, /libvpx-vp9/, "ffmpeg with libvpx-vp9 is required in CI");
+  assert.match(encoders, /libopus/, "ffmpeg with libopus is required in CI");
+  assert.match(encoders, /libaom-av1|libsvtav1/, "ffmpeg with an AV1 encoder is required in CI");
+});
+
+test("remux -c copy: VP9 + Opus (webm) into fragmented mp4", { skip: need(/libvpx-vp9/.test(encoders) && /libopus/.test(encoders), "ffmpeg without libvpx-vp9/libopus") }, () => {
   remuxSmoke(["-c:v", "libvpx-vp9", "-b:v", "200k"], "vp9", "vp09");
 });
 
-test("remux -c copy: AV1 + Opus (webm) into fragmented mp4", { skip: !/libaom-av1|libsvtav1/.test(encoders) || !/libopus/.test(encoders) && "ffmpeg without an AV1 encoder/libopus" }, () => {
+test("remux -c copy: AV1 + Opus (webm) into fragmented mp4", { skip: need(/libaom-av1|libsvtav1/.test(encoders) && /libopus/.test(encoders), "ffmpeg without an AV1 encoder/libopus") }, () => {
   remuxSmoke(["-c:v", /libsvtav1/.test(encoders) ? "libsvtav1" : "libaom-av1", ...(/libsvtav1/.test(encoders) ? [] : ["-cpu-used", "8"])], "av1", "av01");
 });

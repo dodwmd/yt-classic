@@ -35,12 +35,12 @@ export function killChildren(): void {
   for (const c of children) c.kill("SIGKILL");
 }
 
-/** Explicit quality (`?q=1440`): one of QUALITIES within MAX_QUALITY, else the default (itself clamped by the cap). */
+/** Explicit quality (`?q=1440`): one of QUALITIES, at most MAX_QUALITY (a higher one is lowered to it); anything else the default. */
 export function parseQuality(q: string | null): number {
   const n = Number(q);
-  const cap = maxQuality();
-  const ok = (QUALITIES as readonly number[]).includes(n) && n <= cap;
-  return ok ? n : Math.min(DEFAULT_QUALITY, Math.max(cap, QUALITIES[0]));
+  const cap = Math.max(...QUALITIES.filter((t) => t <= maxQuality()), QUALITIES[0]);
+  if ((QUALITIES as readonly number[]).includes(n)) return Math.min(n, cap);
+  return Math.min(DEFAULT_QUALITY, cap);
 }
 
 export type Codec = "avc1" | "vp9" | "av01";
@@ -63,15 +63,13 @@ const hiCodecs = (codecs: readonly Codec[]) => codecs.filter((c): c is "vp9" | "
 
 /**
  * `?q=auto`: the highest tier the display (`maxh`, px of the shorter screen side) can use, at most 1080p unless the client
- * decodes VP9 or AV1, and never above MAX_QUALITY. When the video's offered tiers are known, the highest of those under that cap.
+ * decodes VP9 or AV1, and never above MAX_QUALITY. (The stream's selector falls back to what the video really has.)
  */
-export function autoQuality(maxh: string | null, codecs: readonly Codec[], offered?: readonly number[]): number {
+export function autoQuality(maxh: string | null, codecs: readonly Codec[]): number {
   const h = Number(maxh);
   const screen = maxh !== null && maxh !== "" && Number.isFinite(h) && h > 0 ? h : AVC_MAX;
-  let cap = Math.min(screen, maxQuality(), hiCodecs(codecs).length ? 2160 : AVC_MAX);
-  cap = Math.max(...QUALITIES.filter((t) => t <= cap), QUALITIES[0]);
-  const fits = offered?.filter((t) => t <= cap);
-  return fits?.length ? Math.max(...fits) : cap;
+  const cap = Math.min(screen, maxQuality(), hiCodecs(codecs).length ? 2160 : AVC_MAX);
+  return Math.max(...QUALITIES.filter((t) => t <= cap), QUALITIES[0]);
 }
 
 /** Start offset in whole seconds (`?t=90`), 0 if absent or invalid. */
@@ -102,24 +100,35 @@ const FORMATS_TAG = "YTFMT ";
 // webm Opus audio also remuxes into fragmented mp4 with `-c copy`. The H.264 chain below is the fallback (and the whole story up to 1080p).
 // yt-dlp reports DASH VP9 as "vp9" and HLS/other VP9 as "vp09.00...": the regex takes both.
 const VCODEC_RE: Record<"vp9" | "av01", string> = { vp9: "'^vp0?9'", av01: "'^av01'" };
-export const formatSelector = (q: number, lang: string, codecs: readonly Codec[] = ALL_CODECS) => {
-  const hi = hiCodecs(codecs);
-  if (q > AVC_MAX && !hi.length) q = AVC_MAX; // nothing above 1080p is decodable: don't ask for it
+// Above 1080p only plain SDR 8-bit: HDR and 10-bit (VP9 profile 2/3, AV1 10/12-bit) look washed out on SDR screens and many decoders refuse them.
+const SDR_8BIT = "[dynamic_range!*=?HDR][vcodec!~='^(vp09\\.0[23]|av01\\.\\d\\.\\d+[MH]\\.1[02])']";
+// A tier is the SHORT side of the picture (a 1080x1920 clip is "1080p" and q=720 must not pick its 360x640 stream): landscape
+// streams are bounded by height, portrait ones (aspect ratio below 1) by width. Landscape comes first; a stream with no known aspect counts as landscape.
+const chain = (q: number, lang: string, hi: readonly ("vp9" | "av01")[], portrait: boolean) => {
+  const dim = portrait ? "width" : "height";
+  const fit = `${portrait ? "[aspect_ratio<1]" : "[aspect_ratio>=?1]"}[${dim}<=${q}]`;
   // Codecs the client lacks must not sneak in through the generic fallbacks either.
-  const skip = q > AVC_MAX ? (["vp9", "av01"] as const).filter((c) => !hi.includes(c)).map((c) => `[vcodec!~=${VCODEC_RE[c]}]`).join("") : "";
-  const pref = (audio: string) => `bv*[height<=${q}][vcodec^=avc1]+${audio}/bv*[height<=${q}][ext=mp4]${skip}+${audio}`;
+  const skip = q > AVC_MAX ? (["vp9", "av01"] as const).filter((c) => !hi.includes(c)).map((c) => `[vcodec!~=${VCODEC_RE[c]}]`).join("") + SDR_8BIT : "";
+  const pref = (audio: string) => `bv*${fit}[vcodec^=avc1]+${audio}/bv*${fit}[ext=mp4]${skip}+${audio}`;
   const high = q > AVC_MAX
     ? hi.map((c) => {
-        const v = `bv*[height<=${q}][height>${AVC_MAX}][vcodec~=${VCODEC_RE[c]}][protocol!*=m3u8]`;
+        const v = `bv*${fit}[${dim}>${AVC_MAX}][vcodec~=${VCODEC_RE[c]}]${SDR_8BIT}[protocol!*=m3u8]`;
         return `${v}+ba[ext=m4a][language^=${lang}]/${v}+ba[ext=m4a]/${v}+ba`;
       })
     : [];
-  return [...high, pref(`ba[ext=m4a][language^=${lang}]`), pref("ba[ext=m4a]"), `b[height<=${q}][ext=mp4]${skip}`, `bv*[height<=${q}]${skip}+ba`, `b[height<=${q}]${skip}`].join("/");
+  return [...high, pref(`ba[ext=m4a][language^=${lang}]`), pref("ba[ext=m4a]"), `b${fit}[ext=mp4]${skip}`, `bv*${fit}${skip}+ba`, `b${fit}${skip}`].join("/");
+};
+export const formatSelector = (q: number, lang: string, codecs: readonly Codec[] = ALL_CODECS) => {
+  const hi = hiCodecs(codecs);
+  if (q > AVC_MAX && !hi.length) q = AVC_MAX; // nothing above 1080p is decodable: don't ask for it
+  return `${chain(q, lang, hi, false)}/${chain(q, lang, hi, true)}`;
 };
 
 /** One entry per tier the video really has: its height in (previous tier, tier], with the codec families found there. */
 export type Offered = { qualities: number[]; codecs: Record<string, string[]> };
-type Fmt = { height?: unknown; vcodec?: unknown; protocol?: unknown };
+type Fmt = { height?: unknown; width?: unknown; vcodec?: unknown; protocol?: unknown; dynamic_range?: unknown };
+// HDR and 10-bit streams are never selected above 1080p (see SDR_8BIT), so they must not be offered either.
+const TEN_BIT = /^(vp09\.0[23]|av01\.\d\.\d+[MH]\.1[02])/;
 const family = (vcodec: string): Codec | null =>
   vcodec.startsWith("avc1") ? "avc1" : vcodec.startsWith("vp09") || vcodec === "vp9" ? "vp9" : vcodec.startsWith("av01") ? "av01" : null;
 
@@ -129,8 +138,10 @@ export function offeredFrom(formats: readonly Fmt[]): Offered {
   for (const f of formats) {
     if (typeof f.height !== "number" || f.height <= 0 || typeof f.vcodec !== "string") continue;
     if (typeof f.protocol === "string" && f.protocol.includes("m3u8")) continue; // the stream route can only remux plain HTTPS files
+    if (TEN_BIT.test(f.vcodec) || (typeof f.dynamic_range === "string" && f.dynamic_range.includes("HDR"))) continue;
     const fam = family(f.vcodec);
-    const tier = QUALITIES.find((t) => f.height as number <= t);
+    const side = typeof f.width === "number" && f.width > 0 ? Math.min(f.width, f.height) : f.height; // portrait clips are tiered by their short side too
+    const tier = QUALITIES.find((t) => side <= t);
     if (!fam || tier === undefined || tier > cap) continue;
     (found.get(tier) ?? found.set(tier, new Set()).get(tier)!).add(fam);
   }
@@ -188,6 +199,7 @@ export const clearFailures = () => failures.clear();
 /** Direct googlevideo URLs: [video, audio] or a single muxed URL. Bound to this host's IP. */
 export async function resolveUrls(id: string, q: number, lang: string, codecs: readonly Codec[] = ALL_CODECS): Promise<string[]> {
   if (!VIDEO_ID.test(id)) throw new Error("bad video id");
+  if (q > AVC_MAX && !hiCodecs(codecs).length) q = AVC_MAX; // the selector would ask for 1080p anyway: share that entry
   // The codec set only changes the selector above 1080p.
   const key = `${id}-${q}-${lang}${q > AVC_MAX ? `-${hiCodecs(codecs).join("+")}` : ""}`;
   const failed = recentFailure(key);
@@ -197,7 +209,7 @@ export async function resolveUrls(id: string, q: number, lang: string, codecs: r
       const { stdout } = await run(
         YTDLP(),
         // The same extraction also prints the format list (one tagged JSON line), so the tiers a video has cost no extra run.
-        ["--no-playlist", "--no-warnings", "-f", formatSelector(q, lang, codecs), "-g", "--print", `${FORMATS_TAG}%(formats.:.{height,vcodec,protocol})j`, "--", `https://www.youtube.com/watch?v=${id}`],
+        ["--no-playlist", "--no-warnings", "-f", formatSelector(q, lang, codecs), "-g", "--print", `${FORMATS_TAG}%(formats.:.{height,width,vcodec,protocol,dynamic_range})j`, "--", `https://www.youtube.com/watch?v=${id}`],
         { timeout: 60_000, maxBuffer: 8 * 1024 * 1024 },
       );
       const lines = stdout.split("\n").map((l) => l.trim()).filter(Boolean);

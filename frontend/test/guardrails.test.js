@@ -32,7 +32,7 @@ function importGraph(entry, seen = new Set(), lazy = false) {
 }
 const LAZY_MODULE_GZIP_BYTES = 3 * 1024; // each on-demand module (it loads after the page works)
 const LAZY_TOTAL_GZIP_BYTES = 5 * 1024; // everything a page may still load on demand
-const lazyTotal = (entry) => (entry === "watch.js" ? 8 * 1024 : LAZY_TOTAL_GZIP_BYTES); // the watch page also loads speed, comments and quality on demand (comments.js has its own cap below)
+const lazyTotal = (entry) => (entry === "watch.js" ? 7.25 * 1024 : LAZY_TOTAL_GZIP_BYTES); // the watch page also loads speed, comments and quality on demand (7.25 KB: the sum of their gzipped sizes plus a little headroom) (comments.js has its own cap below)
 const gz = (f) => gzipSync(readFileSync(join(PUBLIC, "js", f))).length;
 
 test("JavaScript per page stays within the size budget", () => {
