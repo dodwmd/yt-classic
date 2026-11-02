@@ -30,6 +30,7 @@ import io.github.dodwmd.ytclassic.data.YtApi
 import io.github.dodwmd.ytclassic.data.formatViews
 import io.github.dodwmd.ytclassic.data.joinParts
 import io.github.dodwmd.ytclassic.data.timeAgo
+import io.github.dodwmd.ytclassic.player.LocalPip
 import io.github.dodwmd.ytclassic.player.StreamPlayer
 import io.github.dodwmd.ytclassic.player.resumeStart
 
@@ -48,6 +49,7 @@ fun WatchScreen(
         val v = r.video
         // Where this screen left off (also the explicit start), else where the server last saw it (any device).
         val begin = remember(v.id) { resumeStart(resume[0], r.progress, v.durationSeconds ?: 0L) }
+        val inPip = LocalPip.current.inPip
         var expanded by remember(v.id) { mutableStateOf(false) }
         val later = rememberLater(api, (listOf(v.id) + r.related.items.map { it.id }).distinct())
         Column(Modifier.fillMaxWidth()) {
@@ -62,7 +64,7 @@ fun WatchScreen(
                     Button(onClick = { override = true }) { Text("Try anyway") }
                 }
             }
-            if (!fullscreen) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
+            if (!fullscreen && !inPip) LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
                 item {
                     Column(Modifier.padding(12.dp)) {
                         Text(v.title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)

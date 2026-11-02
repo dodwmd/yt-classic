@@ -4,6 +4,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -16,7 +17,7 @@ import androidx.compose.ui.unit.dp
 
 // Transport icons drawn in code: font glyphs like ⤢ or ↻ are missing or tiny in some OEM fonts. Decorative; the
 // button around them carries the contentDescription.
-enum class PlayerIcon { Play, Pause, Replay, Fullscreen, ExitFullscreen }
+enum class PlayerIcon { Play, Pause, Replay, Fullscreen, ExitFullscreen, Pip }
 
 @Composable
 fun PlayerIconView(icon: PlayerIcon, tint: Color, modifier: Modifier = Modifier, iconSize: Dp = 28.dp) {
@@ -43,6 +44,10 @@ fun PlayerIconView(icon: PlayerIcon, tint: Color, modifier: Modifier = Modifier,
             }
             PlayerIcon.Fullscreen -> corners(tint, line, s, outward = true)
             PlayerIcon.ExitFullscreen -> corners(tint, line, s, outward = false)
+            PlayerIcon.Pip -> { // a screen with a small window in its lower right corner
+                drawRoundRect(tint, Offset(s * 0.1f, s * 0.2f), Size(s * 0.8f, s * 0.6f), CornerRadius(s * 0.06f), style = line)
+                drawRect(tint, Offset(s * 0.5f, s * 0.46f), Size(s * 0.3f, s * 0.22f))
+            }
         }
     }
 }

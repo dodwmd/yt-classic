@@ -140,6 +140,18 @@ fun SettingsScreen(app: App, onDone: () -> Unit, onStatus: () -> Unit) {
             }
             Switch(checked = background, onCheckedChange = null)
         }
+        val pip by app.settings.pictureInPicture.collectAsState(initial = true)
+        Row(
+            Modifier.fillMaxWidth().toggleable(value = pip, role = Role.Switch) { scope.launch { app.settings.setPictureInPicture(it) } },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text("Picture in picture")
+                Text("A playing video shrinks into a small window when you leave the app, and the player gets a button for it.", color = Muted)
+            }
+            Switch(checked = pip, onCheckedChange = null)
+        }
         SubscriptionsSection(app.api)
         Text("Server health", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(top = 8.dp))
         Text("yt-dlp version, the last successful and failed playback lookups, and storage.", color = Muted)

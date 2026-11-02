@@ -483,7 +483,19 @@ removes the notification whenever it goes to the background. Headset and Bluetoo
 service is alive: it is stopped after the video finishes, after you stop it, after an error in the background, and (with
 the setting off) whenever the app is in the background, so open the app and press Play again.
 
-**Not yet:** picture-in-picture, offline downloads, Play Store publishing.
+**Picture in picture:** a video that is playing shrinks into a small floating window when you press Home or switch apps
+(Android 12+ enters automatically; before that the app enters when you leave). The button next to Fullscreen (inline and
+fullscreen) does it on demand. The window shows only the video, shaped like it (default 16:9, clamped to the platform's
+1:2.39 to 2.39:1), with Play/Pause and, in TV mode, Skip buttons. Tap the window to expand: the same video continues at
+the same position, and fullscreen (and its landscape lock) is restored if it was on. Settings has **Picture in picture**
+(on by default). It only applies to a video that is actually playing: paused, finished, failed or idle playback just goes
+to the background as before. How it combines with the other settings: picture in picture takes precedence over
+**Keep playing in the background** while the window is up (the app counts as on screen, so nothing pauses). Dismissing
+the window (X) stops the app like leaving it does: with background playback on the audio goes on with its notification,
+with it off the video pauses and the session ends. With picture in picture off, or on a device without it
+(`FEATURE_PICTURE_IN_PICTURE`), leaving the app behaves as described under Background audio.
+
+**Not yet:** offline downloads, Play Store publishing.
 
 **Testing it without a phone:** the shell can add an emulator (needs KVM, about 2 GB more):
 

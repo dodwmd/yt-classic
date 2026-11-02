@@ -18,6 +18,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
+import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.HttpDataSource
@@ -93,6 +94,9 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     var errorRetryable by mutableStateOf(true)
         private set
     var finished by mutableStateOf(false)
+        private set
+    /** The decoded video's size (for the picture-in-picture shape); [VideoSize.UNKNOWN] before the first frame. */
+    var videoSize by mutableStateOf(VideoSize.UNKNOWN)
         private set
 
     /** The running TV session (lean-back playback from the subscriptions), or null. See [startTv]. */
@@ -179,6 +183,10 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             override fun onIsPlayingChanged(isPlaying: Boolean) {
                 this@PlaybackHost.isPlaying = isPlaying
                 if (reportsOnPause(isPlaying, exo.playWhenReady, seek.restarting)) reportProgress() // paused or stopped
+            }
+
+            override fun onVideoSizeChanged(videoSize: VideoSize) {
+                this@PlaybackHost.videoSize = videoSize
             }
 
             override fun onPlaybackStateChanged(state: Int) {
@@ -463,6 +471,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         exo.stop()
         exo.clearMediaItems()
         video = null
+        videoSize = VideoSize.UNKNOWN
         isPlaying = false
         buffering = false
         error = null

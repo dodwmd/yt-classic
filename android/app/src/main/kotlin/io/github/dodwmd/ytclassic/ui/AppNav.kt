@@ -58,6 +58,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
 import io.github.dodwmd.ytclassic.App
+import io.github.dodwmd.ytclassic.player.LocalPip
 import kotlinx.coroutines.flow.first
 
 @Composable
@@ -67,6 +68,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
     // The player is fullscreen: no masthead. Deliberately not saved: only a composed player enforces it, so after
     // process death a restored `true` would leave loading/error screens without bars or a way out.
     var fullscreen by remember { mutableStateOf(false) }
+    val inPip = LocalPip.current.inPip // the small window shows only the video
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     // Searching (or navigating) should put the keyboard away, otherwise it covers the results.
@@ -95,7 +97,7 @@ fun AppNav(app: App, openVideoId: String? = null, openTv: Boolean = false) {
 
     Scaffold(
         topBar = {
-            if (!fullscreen) Masthead(
+            if (!fullscreen && !inPip) Masthead(
                 query = query, onQuery = { query = it },
                 onHome = { settle(); toHome() },
                 onSearch = { search(query) },

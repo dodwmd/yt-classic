@@ -44,6 +44,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import android.graphics.Rect
+import androidx.compose.ui.layout.boundsInWindow
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -93,7 +96,9 @@ fun StreamPlayer(
     val quality = host.quality
 
     var controlsVisible by remember(video.id) { mutableStateOf(true) }
-    FullscreenEffect(fullscreen)
+    val pip = LocalPip.current
+    // The small window has no orientation lock or hidden bars; both come back when it is expanded.
+    FullscreenEffect(fullscreen && !pip.inPip)
     BackHandler(enabled = fullscreen) { onFullscreen(false) }
 
     fun savePosition() { if (host.video?.id == video.id) onPosition(if (host.finished) 0 else host.positionSeconds()) }
@@ -143,6 +148,10 @@ fun StreamPlayer(
             }
             if (onSkip != null) TextButton(onClick = onSkip, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Skip", color = textColor) }
             if (onStop != null) TextButton(onClick = onStop, modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp)) { Text("Stop", color = textColor) }
+            if (pip.available) TextButton(
+                onClick = pip.enter,
+                modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = "Picture in picture" },
+            ) { PlayerIconView(PlayerIcon.Pip, textColor) }
             TextButton(
                 onClick = { controlsVisible = true; onFullscreen(!fullscreen) }, // hidden controls must not outlive a fullscreen session
                 modifier = Modifier.sizeIn(minWidth = 48.dp, minHeight = 48.dp).semantics { contentDescription = if (fullscreen) "Exit fullscreen" else "Fullscreen" },
@@ -152,7 +161,10 @@ fun StreamPlayer(
     // One PlayerView for both layouts: movable content moves the same view instead of building a second one (the
     // surface may still redraw for a frame when it is re-attached).
     val videoView = remember(host) { movableContentOf { m: Modifier ->
-        Box(m) {
+        Box(m.onGloballyPositioned {
+            val r = it.boundsInWindow()
+            pip.setVideoBounds(Rect(r.left.toInt(), r.top.toInt(), r.right.toInt(), r.bottom.toInt())) // the transition's source
+        }) {
             AndroidView(
                 factory = { ctx -> PlayerView(ctx).apply { useController = false } },
                 update = { it.player = host.player },
@@ -167,19 +179,19 @@ fun StreamPlayer(
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     Text(message, color = Color.White)
-                    if (host.needsToken) {
+                    if (host.needsToken && !pip.inPip) {
                         val openSettings = LocalOpenSettings.current
                         Button(onClick = openSettings) { Text("Open Settings") }
                     }
                     val actions = errorActions(host.errorCode, host.errorRetryable)
                     actions.hint?.let { Text(it, color = Color.White.copy(alpha = 0.8f)) }
-                    if (actions.showRetry) Button(onClick = { host.retry() }) { Text("Retry") }
+                    if (actions.showRetry && !pip.inPip) Button(onClick = { host.retry() }) { Text("Retry") }
                 }
             }
         }
     } }
 
-    if (fullscreen) {
+    if (fullscreen || pip.inPip) {
         // The video fills the screen; tap it to show or hide the controls laid over the bottom.
         Box(modifier.fillMaxSize().background(Color.Black)) {
             videoView(
@@ -188,7 +200,7 @@ fun StreamPlayer(
                     role = Role.Button, onClickLabel = if (controlsVisible) "Hide controls" else "Show controls",
                 ) { controlsVisible = !controlsVisible }.semantics { contentDescription = "Video" },
             )
-            if (controlsVisible) {
+            if (controlsVisible && !pip.inPip) {
                 Column(
                     Modifier.align(Alignment.BottomCenter).fillMaxWidth().background(Color.Black.copy(alpha = 0.7f))
                         .windowInsetsPadding(WindowInsets.safeDrawing),

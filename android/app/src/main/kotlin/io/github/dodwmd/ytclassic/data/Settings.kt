@@ -12,6 +12,7 @@ private val Context.dataStore by preferencesDataStore(name = "settings")
 private val SERVER_URL = stringPreferencesKey("server_url")
 private val ACCESS_TOKEN = stringPreferencesKey("access_token")
 private val BACKGROUND_AUDIO = booleanPreferencesKey("background_audio")
+private val PICTURE_IN_PICTURE = booleanPreferencesKey("picture_in_picture")
 
 /** Persists the backend address, e.g. "192.168.1.153:8080" (home Wi-Fi) or a VPN host name, and playback options. */
 class SettingsStore(private val context: Context) {
@@ -41,5 +42,12 @@ class SettingsStore(private val context: Context) {
 
     suspend fun setBackgroundAudio(on: Boolean) {
         context.dataStore.edit { it[BACKGROUND_AUDIO] = on }
+    }
+
+    /** Shrink a playing video into a small window when leaving the app, and offer the button. On by default. */
+    val pictureInPicture: Flow<Boolean> = context.dataStore.data.map { it[PICTURE_IN_PICTURE] ?: true }
+
+    suspend fun setPictureInPicture(on: Boolean) {
+        context.dataStore.edit { it[PICTURE_IN_PICTURE] = on }
     }
 }
