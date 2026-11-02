@@ -129,7 +129,6 @@ class FeedTest {
         assertEquals(List<String?>(3) { "Bearer s3cret-token" }, auth)
         reply = 401 to """{"error":"unauthorized"}"""
         assertFailsWith<AuthException> { api.feed(FeedFilter()) }
-        Unit
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
