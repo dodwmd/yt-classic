@@ -21,7 +21,13 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
 /** A failure with a message that is fit to show to the user. */
-open class ApiException(message: String, cause: Throwable? = null) : Exception(message, cause)
+open class ApiException(
+    message: String,
+    cause: Throwable? = null,
+    /** The backend's classified error code ("private", "rate-limited", ...), or null for older servers and local failures. */
+    val code: String? = null,
+    val retryable: Boolean = false,
+) : Exception(message, cause)
 
 /** The server wants an access token and the request had none ([tokenSet] false) or a wrong one. */
 class AuthException(val tokenSet: Boolean) : ApiException(
@@ -200,10 +206,7 @@ class YtApi(
         execute(request(url("api/subscriptions/export", "format" to format)).build()).use {
             val text = it.body.string()
             if (it.code == 401) throw AuthException(token().isNotBlank())
-            if (!it.isSuccessful) {
-                val message = runCatching { ApiJson.decodeFromString<ApiError>(text).error }.getOrDefault("")
-                throw ApiException(message.ifBlank { "Request failed (${it.code})" })
-            }
+            if (!it.isSuccessful) throw apiErrorFrom(it.code, text)
             text
         }
     }
@@ -274,7 +277,7 @@ class YtApi(
         if (!it.isSuccessful) {
             val error = runCatching { ApiJson.decodeFromString<ApiError>(text) }.getOrDefault(ApiError())
             if (it.code == 409 && error.code == "need-subscriptions") throw NeedSubscriptionsException(error.error.ifBlank { "Subscribe to more channels to turn on TV." }, error.have, error.need)
-            throw ApiException(error.error.ifBlank { "Request failed (${it.code})" })
+            throw apiErrorFrom(it.code, text)
         }
         try {
             ApiJson.decodeFromString(ApiJson.serializersModule.serializer<T>(), text)

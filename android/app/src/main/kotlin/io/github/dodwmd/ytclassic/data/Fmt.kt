@@ -66,6 +66,9 @@ fun statusRows(s: StatusResponse, nowMillis: Long = System.currentTimeMillis()):
         "ffmpeg" to if (s.ffmpeg.present) s.ffmpeg.version.orEmpty() else "not found",
         "Node" to s.node,
         "Uptime" to uptime,
-        "Database and cache" to if (s.cache.ok) "ok, ${s.cache.entries} cached items (${s.cache.bytes / 1024} KB)" else "unavailable",
+        "Streams" to "${s.streams.active} active, ${s.streams.started} started, ${s.streams.failed} failed",
+        "Cache lookups" to "${s.cache.hits} hits, ${s.cache.misses} misses",
+        "Data API today" to "${s.dataApi.unitsToday} units used, ${s.dataApi.searchFallbackRemaining} search fallbacks left",
+        "Database and cache" to if (s.cache.ok) "ok, ${s.cache.entries} cached items (${s.cache.bytes / 1024} KB)${s.cache.dbBytes?.let { ", database ${it / 1024} KB" } ?: ""}" else "unavailable",
     )
 }

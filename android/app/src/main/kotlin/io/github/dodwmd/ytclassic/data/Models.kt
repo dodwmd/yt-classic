@@ -163,6 +163,10 @@ data class VideoResponse(
     val qualities: List<Int> = listOf(360, 480, 720, 1080),
     val lang: String = "",
     val progress: Progress? = null,
+    /** False only when the server already knows the video can't be played; [reason] is the error code, [message] the explanation. */
+    val playable: Boolean = true,
+    val reason: String? = null,
+    val message: String = "",
 )
 
 @Serializable
@@ -236,7 +240,7 @@ data class ImportSkipped(val invalid: Int = 0, val handles: Int = 0, val full: I
 
 /** An error body. [code], [have] and [need] are only set by the few errors a client acts on (TV's "need-subscriptions"). */
 @Serializable
-data class ApiError(val error: String = "", val code: String = "", val have: Int = 0, val need: Int = 0)
+data class ApiError(val error: String = "", val code: String = "", val retryable: Boolean = false, val have: Int = 0, val need: Int = 0)
 
 /** `GET /api/tv/next`: the next TV video, shaped like the watch page's data (no related list) plus its channel. */
 @Serializable
@@ -256,6 +260,8 @@ data class StatusResponse(
     val node: String = "",
     val uptimeSeconds: Long = 0,
     val cache: CacheStatus = CacheStatus(),
+    val streams: StreamStats = StreamStats(),
+    val dataApi: DataApiStatus = DataApiStatus(),
 )
 
 @Serializable
@@ -277,4 +283,10 @@ data class ResolveSuccess(val at: String = "")
 data class ResolveFailure(val at: String = "", val reason: String = "")
 
 @Serializable
-data class CacheStatus(val ok: Boolean = false, val entries: Int = 0, val bytes: Long = 0)
+data class CacheStatus(val ok: Boolean = false, val entries: Int = 0, val bytes: Long = 0, val hits: Long = 0, val misses: Long = 0, val dbBytes: Long? = null)
+
+@Serializable
+data class StreamStats(val active: Int = 0, val started: Int = 0, val finished: Int = 0, val failed: Int = 0)
+
+@Serializable
+data class DataApiStatus(val unitsToday: Int = 0, val searchFallbackRemaining: Int = 0)

@@ -19,14 +19,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.AuthException
+import io.github.dodwmd.ytclassic.data.errorActions
 import kotlinx.coroutines.CancellationException
 
 sealed interface LoadState<out T> {
     data object Loading : LoadState<Nothing>
-    data class Error(val message: String, val needsToken: Boolean = false) : LoadState<Nothing>
+    data class Error(val message: String, val needsToken: Boolean = false, val code: String? = null, val retryable: Boolean = true) : LoadState<Nothing>
     data class Ready<T>(val data: T) : LoadState<T>
 }
 
@@ -46,7 +50,7 @@ fun <T> rememberLoad(vararg keys: Any?, block: suspend () -> T): Loaded<T> {
         } catch (e: CancellationException) {
             throw e
         } catch (e: ApiException) {
-            LoadState.Error(e.message ?: "Something went wrong.", needsToken = e is AuthException)
+            LoadState.Error(e.message ?: "Something went wrong.", needsToken = e is AuthException, code = e.code, retryable = e.retryable)
         } catch (e: Exception) {
             Log.e("YtClassic", "load failed", e) // the user only sees a generic message
             LoadState.Error("Something went wrong.")
@@ -61,13 +65,15 @@ fun <T> LoadedContent(loaded: Loaded<T>, modifier: Modifier = Modifier, content:
     when (val s = loaded.state) {
         LoadState.Loading -> CenteredBox(modifier) { CircularProgressIndicator() }
         is LoadState.Error -> CenteredBox(modifier) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(24.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(24.dp).semantics { liveRegion = LiveRegionMode.Polite }) {
                 Text(s.message, color = MaterialTheme.colorScheme.error)
                 if (s.needsToken) {
                     val openSettings = LocalOpenSettings.current
                     Button(onClick = openSettings) { Text("Open Settings") }
                 }
-                Button(onClick = loaded.retry) { Text("Retry") }
+                val actions = errorActions(s.code, s.retryable)
+                actions.hint?.let { Text(it, color = Muted) }
+                if (actions.showRetry) Button(onClick = loaded.retry) { Text("Retry") }
             }
         }
         is LoadState.Ready -> content(s.data)

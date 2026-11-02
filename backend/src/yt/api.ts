@@ -2,6 +2,8 @@ import { cached, isCached } from "../cache.ts";
 import { spend } from "../tabquota.ts";
 import { isoSeconds } from "../format.ts";
 import { fetchT } from "../http.ts";
+import { UpstreamError, type ErrorCode } from "../errors.ts";
+import { addUnits } from "../quota.ts";
 
 export interface VideoSummary {
   id: string;
@@ -26,11 +28,12 @@ async function call(path: string, params: Record<string, string>): Promise<any> 
   const key = process.env.YT_API_KEY;
   if (!key) throw new Error("YT_API_KEY is not set");
   const url = `${BASE}/${path}?${new URLSearchParams({ ...params, key })}`;
+  addUnits(path === "search" ? 100 : 1); // quota is charged per request, whether or not it succeeds
   const res = await fetchT(url);
   if (!res.ok) {
     // Never include the URL (contains the key) in errors.
     const body = await res.json().catch(() => ({}));
-    throw new Error(`YouTube API ${path} failed: ${res.status} ${body?.error?.message ?? ""}`);
+    throw new UpstreamError(`YouTube API ${path} failed: ${res.status} ${body?.error?.message ?? ""}`, res.status, String(body?.error?.errors?.[0]?.reason ?? ""));
   }
   return res.json();
 }
@@ -74,11 +77,23 @@ export interface VideoDetail extends VideoSummary {
   likes?: string;
   /** "live" or "upcoming" for streams; absent for ordinary videos (and for entries cached before this field existed). */
   liveBroadcastContent?: string;
+  /** Set only when the Data API already says this video can't be played (a classified error code). */
+  unplayable?: ErrorCode;
+}
+
+/** Playability the Data API metadata already tells us (no extra quota); undefined when it looks playable or unknown. */
+export function unplayableReason(v: any): ErrorCode | undefined {
+  if (v.status?.privacyStatus === "private") return "private";
+  if (["deleted", "failed", "rejected"].includes(v.status?.uploadStatus)) return "removed";
+  if (v.snippet?.liveBroadcastContent === "live") return "live";
+  if (v.snippet?.liveBroadcastContent === "upcoming") return "upcoming";
+  if (v.contentDetails?.contentRating?.ytRating === "ytAgeRestricted") return "age-restricted";
+  return undefined;
 }
 
 export function video(id: string): Promise<VideoDetail | null> {
   return cached(`video:${id}`, TEN_MIN, async () => {
-    const data = await call("videos", { part: "snippet,contentDetails,statistics", id }); // 1 unit
+    const data = await call("videos", { part: "snippet,contentDetails,statistics,status", id }); // 1 unit
     const v = data.items?.[0];
     if (!v) return null;
     return {
@@ -93,6 +108,7 @@ export function video(id: string): Promise<VideoDetail | null> {
       views: v.statistics?.viewCount,
       likes: v.statistics?.likeCount,
       liveBroadcastContent: v.snippet.liveBroadcastContent === "live" || v.snippet.liveBroadcastContent === "upcoming" ? v.snippet.liveBroadcastContent : undefined,
+      unplayable: unplayableReason(v),
     };
   }, true);
 }

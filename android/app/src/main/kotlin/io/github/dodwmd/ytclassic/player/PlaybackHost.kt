@@ -24,9 +24,12 @@ import androidx.media3.datasource.HttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import androidx.media3.exoplayer.source.SinglePeriodTimeline
+import io.github.dodwmd.ytclassic.data.ApiException
 import io.github.dodwmd.ytclassic.data.AuthException
 import io.github.dodwmd.ytclassic.data.NeedSubscriptionsException
 import io.github.dodwmd.ytclassic.data.VideoDetail
+import io.github.dodwmd.ytclassic.data.errorBodyOf
+import io.github.dodwmd.ytclassic.data.shortMessage
 import io.github.dodwmd.ytclassic.data.YtApi
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -55,7 +58,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
     private val dataSources = DataSource.Factory { AuthDataSource(streamClient, { streamOrigin }, { streamAuth }) }
 
     private val exo = ExoPlayer.Builder(context)
-        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources))
+        .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources).setLoadErrorHandlingPolicy(StreamErrorPolicy()))
         // Take audio focus (pause for calls, duck for prompts, stop other media) and pause when headphones are unplugged.
         .setAudioAttributes(AudioAttributes.Builder().setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MOVIE).build(), true)
         .setHandleAudioBecomingNoisy(true)
@@ -83,6 +86,11 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         private set
     /** The current [error] is the server asking for (or rejecting) the access token: the UI offers Settings. */
     var needsToken by mutableStateOf(false)
+        private set
+    /** The backend's classified code for the current [error] (null when unclassified); drives the Retry button. */
+    var errorCode by mutableStateOf<String?>(null)
+        private set
+    var errorRetryable by mutableStateOf(true)
         private set
     var finished by mutableStateOf(false)
         private set
@@ -192,9 +200,17 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
             override fun onPlayerError(e: PlaybackException) {
                 if (seek.restarting) return // the old stream failing doesn't matter, it is being replaced
                 buffering = false
-                val status = (e.cause as? HttpDataSource.InvalidResponseCodeException)?.responseCode
-                needsToken = status == 401
-                error = if (needsToken) "Server needs an access token: set it in Settings." else "Couldn't play this video (${e.errorCodeName})."
+                val http = e.cause as? HttpDataSource.InvalidResponseCodeException
+                needsToken = http?.responseCode == 401
+                // Before any video bytes the stream route answers with the classified JSON error: say why it failed.
+                val body = http?.takeIf { !needsToken }?.let { errorBodyOf(it.responseBody.decodeToString()) }
+                errorCode = body?.code?.ifBlank { null }
+                errorRetryable = body?.retryable ?: true
+                error = when {
+                    needsToken -> "Server needs an access token: set it in Settings."
+                    body != null -> shortMessage(body.error) // the server's explanation, with or without a code
+                    else -> "Couldn't play this video (${e.errorCodeName})."
+                }
                 endIfDone()
             }
         })
@@ -378,6 +394,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         pendingPlay = play ?: playIntent
         quality = q
         error = null
+        errorCode = null
         needsToken = false
         finished = false
         buffering = true
@@ -400,6 +417,8 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
                 seek.failRestart()
                 buffering = false
                 needsToken = e is AuthException
+                errorCode = (e as? ApiException)?.code
+                errorRetryable = (e as? ApiException)?.retryable ?: true
                 error = e.message ?: "Couldn't start the stream."
                 endIfDone()
             }
@@ -447,6 +466,7 @@ class PlaybackHost(private val context: Context, private val api: YtApi) {
         isPlaying = false
         buffering = false
         error = null
+        errorCode = null
         finished = false
         stopService()
     }

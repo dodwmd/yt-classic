@@ -3,6 +3,8 @@ package io.github.dodwmd.ytclassic.player
 import androidx.annotation.OptIn
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.movableContentOf
 import androidx.compose.ui.semantics.Role
+import io.github.dodwmd.ytclassic.data.errorActions
 import io.github.dodwmd.ytclassic.ui.LocalOpenSettings
 import io.github.dodwmd.ytclassic.ui.classicSliderColors
 import androidx.compose.material3.Button
@@ -44,7 +47,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
@@ -156,13 +161,19 @@ fun StreamPlayer(
             )
             if (host.buffering && host.error == null) CircularProgressIndicator(Modifier.align(Alignment.Center), color = Color.White)
             host.error?.let { message ->
-                Column(Modifier.align(Alignment.Center).padding(16.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    Modifier.align(Alignment.Center).verticalScroll(rememberScrollState()).padding(16.dp)
+                        .semantics { liveRegion = LiveRegionMode.Polite }, // TalkBack reads why playback failed
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
                     Text(message, color = Color.White)
                     if (host.needsToken) {
                         val openSettings = LocalOpenSettings.current
                         Button(onClick = openSettings) { Text("Open Settings") }
                     }
-                    Button(onClick = { host.retry() }) { Text("Retry") }
+                    val actions = errorActions(host.errorCode, host.errorRetryable)
+                    actions.hint?.let { Text(it, color = Color.White.copy(alpha = 0.8f)) }
+                    if (actions.showRetry) Button(onClick = { host.retry() }) { Text("Retry") }
                 }
             }
         }

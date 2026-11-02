@@ -1,5 +1,5 @@
 import { cached } from "../cache.ts";
-import { fetchT } from "../http.ts";
+import { fetchT, logSafe } from "../http.ts";
 import { limiter } from "../limit.ts";
 import { channelVideos } from "./api.ts";
 import type { Subscription } from "../store.ts";
@@ -71,7 +71,7 @@ export function channelFeed(id: string): Promise<FeedItem[]> {
       return await rssSlots.run(() => fetchRss(id));
     } catch (e) {
       // YouTube's feed endpoint intermittently answers 404/500 for minutes at a time. Don't blank the home page.
-      console.error(`${(e as Error).message}; falling back to the Data API`);
+      console.error(`${logSafe((e as Error).message)}; falling back to the Data API`);
       return uploadsAsFeed(id);
     }
   }, true);
@@ -79,7 +79,7 @@ export function channelFeed(id: string): Promise<FeedItem[]> {
 
 /** Merged feed, newest first. A failing channel is skipped rather than breaking the page. */
 export async function subscriptionFeed(subs: Subscription[], limit = 60): Promise<FeedItem[]> {
-  const all = await Promise.all(subs.map((s) => channelFeed(s.id).catch((e) => (console.error(e.message), []))));
+  const all = await Promise.all(subs.map((s) => channelFeed(s.id).catch((e) => (console.error(logSafe(e.message)), []))));
   return mergeFeeds(all, limit);
 }
 
