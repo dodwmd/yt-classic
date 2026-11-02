@@ -22,8 +22,11 @@ fun Tiles.usable(): Boolean =
 fun Tiles.locate(seconds: Float): TileRect {
     val i = if (seconds.isNaN()) 0 else (seconds / interval).coerceIn(0.0, (count - 1).toDouble()).toInt()
     val per = cols * rows
-    val k = i % per
-    return TileRect(i / per, (k % cols) * w, (k / cols) * h, w, h)
+    val sheet = i / per
+    val k = i - sheet * per
+    val row = k / cols
+    val col = k - row * cols
+    return TileRect(sheet, col * w, row * h, w, h)
 }
 
 const val MAX_SHEET_SIDE = 4096

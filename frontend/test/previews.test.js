@@ -16,7 +16,7 @@ const calls = [];
 let reply = () => ({ status: 200, body: { tiles: TILES, duration: 213 } });
 globalThis.fetch = async (url) => {
   calls.push(url);
-  const r = reply(url);
+  const r = reply();
   return { ok: r.status < 400, status: r.status, json: async () => r.body };
 };
 const { locate, valid, sheetUrl, previews, MAX_W } = await import("../public/js/previews.js");
